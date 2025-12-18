@@ -1,5 +1,5 @@
 {
-  "write_word": "ERASE",
   "arm_ttl_seconds": 600,
-  "flash_enabled": false
+  "flash_enabled": true,
+  "write_word": "ERASE"
 }
