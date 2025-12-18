@@ -491,6 +491,8 @@ def disks():
 def api_os():
     catalog = load_os_catalog()
     q = request.args.get("q", "").strip().lower()
+    if q in ("raspi", "rpi"):
+        q = "raspberry"
     if q:
         catalog = [x for x in catalog if (q in x["name"].lower() or q in (x["description"] or "").lower())]
     return jsonify({"count": len(catalog), "items": catalog[:250]})
