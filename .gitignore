@@ -13,3 +13,6 @@ __pycache__/
 
 # editor
 .vscode/
+
+# ignore policy backup snapshots
+data/policy.json.bak.*
