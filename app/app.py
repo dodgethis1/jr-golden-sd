@@ -749,6 +749,28 @@ def api_job(job_id: str):
     if not job:
         return jsonify({"ok": False, "error": "Unknown job id"}), 404
     job = job_refresh(job)
+    # JOB_STATUS_RC_WINS_API_JOB: rc file wins over stale 'running' state
+    try:
+        from pathlib import Path
+        rc_path = Path('cache/jobs') / f"{job_id}.rc"
+        if rc_path.exists():
+            rc_txt = rc_path.read_text(encoding='utf-8', errors='ignore').strip()
+            try:
+                rc_val = int(rc_txt)
+            except Exception:
+                rc_val = None
+            job['exit_code'] = rc_val
+            job['rc'] = rc_val
+            job['status'] = 'success' if rc_val == 0 else 'failed'
+            job['done'] = True
+        else:
+            pid = job.get('pid')
+            if isinstance(pid, int) and Path(f"/proc/{pid}").exists():
+                job['status'] = 'running'
+            elif job.get('status') == 'running':
+                job['status'] = 'stale'
+    except Exception as e:
+        job.setdefault('status_note', f"status_enrich_error: {e}")
     # Don't spam huge logs in JSON; provide log path and let caller fetch tail via ssh if needed
     return jsonify({"ok": True, "job": job})
 
@@ -900,7 +922,6 @@ PY2
     script = script.replace("python3 - <<'PY2'", 'export JR_META="$META"\nexport JR_SHA="$SHA"\nexport JR_SIZE="$SIZE"\npython3 - <<\'PY2\'')
 
     job = start_job("download_os", script, {"os_id": os_id, "url": url, "out": paths["bin"]})
-    return jsonify({"ok": True, "job_id": job["id"], "job": job, "paths": paths})
 
 @app.get("/api/qr")
 def api_qr():
