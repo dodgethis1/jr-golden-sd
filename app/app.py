@@ -1,4 +1,4 @@
-import json, os, subprocess, re, io, time, hashlib
+import json, os, subprocess, re, io, time, hashlib, secrets
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 from flask import Flask, jsonify, send_from_directory, Response, request
@@ -9,13 +9,18 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
 
+# ---------------- core helpers ----------------
+
 def sh(cmd: list[str]) -> str:
     return subprocess.check_output(cmd, text=True).strip()
+
+def ensure_cache_dir():
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
 def load_policy() -> dict:
     # One-word, ALL-CAPS safety token for destructive writes
     default_word = os.environ.get("JR_WRITE_WORD", "ERASE").strip().upper() or "ERASE"
-    pol = {"write_word": default_word}
+    pol = {"write_word": default_word, "arm_ttl_seconds": 600}
     try:
         path = os.path.join(BASE_DIR, "data", "policy.json")
         if os.path.exists(path):
@@ -23,6 +28,8 @@ def load_policy() -> dict:
                 obj = json.load(f)
             w = str(obj.get("write_word", default_word)).strip().upper() or default_word
             pol["write_word"] = w
+            if "arm_ttl_seconds" in obj:
+                pol["arm_ttl_seconds"] = int(obj["arm_ttl_seconds"])
     except Exception:
         pass
     return pol
@@ -85,6 +92,7 @@ def list_urls(port: int) -> list[str]:
     except Exception:
         pass
 
+    # no promises, but harmless
     host = os.environ.get("HOSTNAME", "").strip()
     if host:
         urls.append(f"http://{host}.local:{port}/")
@@ -97,7 +105,7 @@ def list_urls(port: int) -> list[str]:
     return out
 
 def cache_get(url: str, cache_name: str, ttl_seconds: int = 6*3600) -> bytes:
-    os.makedirs(CACHE_DIR, exist_ok=True)
+    ensure_cache_dir()
     cpath = os.path.join(CACHE_DIR, cache_name)
     now = time.time()
 
@@ -200,6 +208,8 @@ def guess_decompress_cmd(url: str) -> str:
         return "unzip -p"
     return "(unknown extractor)"
 
+# ---------------- disk safety ----------------
+
 def safety_state() -> dict:
     cols = "NAME,KNAME,PATH,MODEL,SERIAL,SIZE,TYPE,TRAN,MOUNTPOINT,FSTYPE,ROTA,RM"
     raw = sh(["lsblk", "-J", "-o", cols])
@@ -243,6 +253,40 @@ def safety_state() -> dict:
         "can_flash_here": (m["mode"] == "SD"),
     }
 
+# ---------------- arming state (still no writes) ----------------
+
+def arm_state_path() -> str:
+    ensure_cache_dir()
+    return os.path.join(CACHE_DIR, "arm_state.json")
+
+def load_arm_state() -> dict | None:
+    path = arm_state_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            st = json.load(f)
+        if float(st.get("expires_at", 0)) < time.time():
+            return None
+        return st
+    except Exception:
+        return None
+
+def save_arm_state(st: dict):
+    path = arm_state_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(st, f)
+
+def clear_arm_state():
+    path = arm_state_path()
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+# ---------------- routes ----------------
+
 @app.get("/api/health")
 def health():
     m = detect_mode()
@@ -256,14 +300,22 @@ def api_urls():
 def safety():
     s = safety_state()
     pol = load_policy()
+    armed = load_arm_state()
     return jsonify({
         "version": get_version(),
         "policy": {
-            "flash_enabled": False,
+            "flash_enabled": False,      # STILL READ-ONLY
             "can_flash_here": s["can_flash_here"],
             "root_disk_blocked": True,
             "requires_sd_mode": True,
             "write_word": pol.get("write_word", "ERASE"),
+            "arm_ttl_seconds": int(pol.get("arm_ttl_seconds", 600)),
+        },
+        "armed": {
+            "active": bool(armed),
+            "target": armed.get("target") if armed else None,
+            "os_id": armed.get("os_id") if armed else None,
+            "expires_at": armed.get("expires_at") if armed else None,
         },
         "state": {
             "mode": s["mode"],
@@ -271,6 +323,17 @@ def safety():
             "root_parent": s["root_parent"],
         },
         "eligible_targets": s["eligible_targets"],
+    })
+
+@app.get("/api/disks")
+def disks():
+    # backward compat + UI visibility
+    s = safety_state()
+    return jsonify({
+        "root_source": s["root_source"],
+        "root_parent": s["root_parent"],
+        "mode": s["mode"],
+        "disks": s["disks"],
     })
 
 @app.get("/api/os")
@@ -283,6 +346,7 @@ def api_os():
 
 @app.post("/api/plan_flash")
 def api_plan_flash():
+    # DRY-RUN plan only
     body = request.get_json(force=True, silent=True) or {}
     target = str(body.get("target", "")).strip()
     os_id = str(body.get("os_id", "")).strip()
@@ -306,9 +370,9 @@ def api_plan_flash():
     plan = {
         "ok": True,
         "note": "DRY-RUN ONLY. No writes occur in this build.",
-        "confirmations": [
-            {"type": "WORD", "value": pol.get("write_word", "ERASE"), "note": "One-word ALL-CAPS write safety token"},
-            {"type": "TARGET", "value": target, "note": "Target must match exactly"}
+        "confirmations_required": [
+            {"type": "WORD", "value": pol.get("write_word", "ERASE")},
+            {"type": "TARGET", "value": target},
         ],
         "target": target,
         "os": {
@@ -321,7 +385,6 @@ def api_plan_flash():
             "extract_sha256": os_item.get("extract_sha256"),
             "download_size": os_item.get("image_download_size"),
             "extract_size": os_item.get("extract_size"),
-            "init_format": os_item.get("init_format"),
         },
         "steps": [
             {"step": 1, "action": "Re-check safety", "detail": "Confirm target is not the root disk and SD mode is active."},
@@ -329,15 +392,64 @@ def api_plan_flash():
             {"step": 3, "action": "Verify checksum (if available)", "detail": "Compare SHA256 of download/extract if publisher hash is provided."},
             {"step": 4, "action": "Decompress + write", "detail": f"{guess_decompress_cmd(url)} cache/os.* | sudo dd of={target} bs=4M conv=fsync status=progress"},
             {"step": 5, "action": "Sync + re-read partition table", "detail": "sync; sudo partprobe"},
-            {"step": 6, "action": "First boot customization", "detail": "If supported (Pi OS cloud-init), write user-data/network-config onto boot partition."}
         ],
         "warnings": [
             "This plan will destroy all data on the target disk when we enable flashing.",
             "Root disk is always blocked. Target must be explicitly selected and confirmed.",
-            "Some OS images may not support first-boot customization; then it’s flash-only."
         ]
     }
     return jsonify(plan)
+
+@app.get("/api/arm_status")
+def arm_status():
+    st = load_arm_state()
+    return jsonify({"active": bool(st), "state": st})
+
+@app.post("/api/arm")
+def arm():
+    # STILL NO WRITES. This just creates a short-lived token that a future /api/flash will require.
+    body = request.get_json(force=True, silent=True) or {}
+    target = str(body.get("target", "")).strip()
+    os_id = str(body.get("os_id", "")).strip()
+    word = str(body.get("word", "")).strip().upper()
+    confirm_target = str(body.get("confirm_target", "")).strip()
+    serial_suffix = str(body.get("serial_suffix", "")).strip()
+
+    pol = load_policy()
+    s = safety_state()
+    eligible = {x["path"]: x for x in s["eligible_targets"]}
+
+    if not s["can_flash_here"]:
+        return jsonify({"ok": False, "error": "Not in SD mode. Arming is only allowed when booted from SD."}), 400
+    if target not in eligible:
+        return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
+    if confirm_target != target:
+        return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
+    if word != pol.get("write_word", "ERASE"):
+        return jsonify({"ok": False, "error": f"Write word must be exactly: {pol.get('write_word','ERASE')}"}), 400
+
+    if serial_suffix:
+        actual = (eligible[target].get("serial") or "")
+        if actual and not actual.endswith(serial_suffix):
+            return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
+
+    ttl = int(pol.get("arm_ttl_seconds", 600))
+    now = time.time()
+    token = secrets.token_urlsafe(16)
+    st = {
+        "token": token,
+        "target": target,
+        "os_id": os_id,
+        "issued_at": now,
+        "expires_at": now + ttl,
+    }
+    save_arm_state(st)
+    return jsonify({"ok": True, "armed": True, "state": st})
+
+@app.post("/api/disarm")
+def disarm():
+    clear_arm_state()
+    return jsonify({"ok": True, "armed": False})
 
 @app.get("/api/qr")
 def api_qr():

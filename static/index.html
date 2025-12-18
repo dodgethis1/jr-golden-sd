@@ -11,12 +11,12 @@
     .mode { font-size: 22px; font-weight: 800; }
     .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background:#f3f3f3; }
     code, pre { background: #f3f3f3; padding: 8px; border-radius: 10px; overflow:auto; }
-    table { width: 100%; border-collapse: collapse; }
-    td, th { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
     input, select, button { font-size: 16px; padding: 8px; }
     button { cursor: pointer; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .row > * { flex: 1 1 220px; }
   </style>
 </head>
 <body>
@@ -34,43 +34,71 @@
   <div class="box" id="planner">
     <b>Flash Plan (dry-run):</b><br><br>
 
-    <label>Target disk (eligible only):<br>
-      <select id="target"></select>
-    </label>
-    <br><br>
+    <div class="row">
+      <label>Target disk (eligible only):<br>
+        <select id="target"></select>
+      </label>
 
-    <label>OS search:<br>
-      <input id="q" placeholder="raspberry pi os, twister, ubuntu, home assistant…" style="width:100%">
-    </label>
-    <br><br>
+      <label>OS search:<br>
+        <input id="q" placeholder="raspberry pi os, twister, ubuntu…" style="width:100%">
+      </label>
 
-    <label>OS choice (top 250 results):<br>
-      <select id="os"></select>
-    </label>
-    <br><br>
+      <label>OS choice (top 250 results):<br>
+        <select id="os"></select>
+      </label>
+    </div>
 
+    <br>
     <button id="planBtn">Generate plan (dry-run)</button>
     <div id="planOut" style="margin-top:12px;"></div>
+
+    <hr style="margin:16px 0;">
+
+    <b>ARM (still no writes):</b><br>
+    <small>You must type the safety word and the exact target. This arms for a short time only.</small><br><br>
+
+    <div class="row">
+      <label>Write word (ALL CAPS):<br>
+        <input id="word" placeholder="ERASE">
+      </label>
+
+      <label>Confirm target (exact):<br>
+        <input id="confirmTarget" placeholder="/dev/nvme0n1">
+      </label>
+
+      <label>Serial suffix (optional, last 4):<br>
+        <input id="serialSuffix" placeholder="0111">
+      </label>
+    </div>
+
+    <br>
+    <button id="armBtn">ARM (no write)</button>
+    <button id="disarmBtn">DISARM</button>
+
+    <div id="armOut" style="margin-top:12px;"></div>
   </div>
 
 <script>
 async function j(url){ const r=await fetch(url); return await r.json(); }
-
 function opt(el, value, text){
   const o = document.createElement("option");
   o.value = value; o.textContent = text;
   el.appendChild(o);
 }
-
 async function loadOS(q=""){
   const osSel = document.getElementById("os");
   osSel.innerHTML = "";
   const data = await j("/api/os" + (q ? ("?q=" + encodeURIComponent(q)) : ""));
   (data.items || []).forEach(it => {
-    const label = `${it.name}  [${it.provider_label}]`;
-    opt(osSel, it.id, label);
+    opt(osSel, it.id, `${it.name}  [${it.provider_label}]`);
   });
 }
+function tsToLocal(ts){
+  if (!ts) return "";
+  try { return new Date(ts * 1000).toLocaleString(); } catch { return ""; }
+}
+
+let lastPlan = null;
 
 (async () => {
   const h = await j("/api/health");
@@ -81,26 +109,30 @@ async function loadOS(q=""){
      <div><b>Root parent:</b> <code>/dev/${h.root_parent || "unknown"}</code></div>`;
 
   const u = await j("/api/urls");
-  const list = (u.urls || []).map(x => `<li><a href="${x}">${x}</a></li>`).join("");
-  document.getElementById("urls").innerHTML = `<b>Open this from your phone/PC:</b><ul>${list || "<li>(no URLs detected)</li>"}</ul>`;
+  document.getElementById("urls").innerHTML =
+    `<b>Open this from your phone/PC:</b>
+     <ul>${(u.urls||[]).map(x => `<li><a href="${x}">${x}</a></li>`).join("")}</ul>`;
   const first = (u.urls && u.urls[0]) ? u.urls[0] : location.origin + "/";
   document.getElementById("qr").innerHTML =
     `<b>QR (scan me):</b><br><img src="/api/qr?u=${encodeURIComponent(first)}" alt="QR"><br><small><code>${first}</code></small>`;
 
   const s = await j("/api/safety");
   const p = s.policy;
+  const armed = s.armed || {active:false};
   document.getElementById("policy").innerHTML =
     `<b>Safety policy:</b><br>
      Flash enabled: <span class="pill">${p.flash_enabled}</span><br>
-     Can flash here (must be SD mode): <span class="pill">${p.can_flash_here}</span><br>
+     Can flash here (SD mode): <span class="pill">${p.can_flash_here}</span><br>
      Root disk blocked: <span class="pill">${p.root_disk_blocked}</span><br>
-     Required write word: <span class="pill">${p.write_word}</span><br><br>
-     <small>We will not enable flashing until the safety engine + confirmations are complete.</small>`;
+     Write word: <span class="pill">${p.write_word}</span><br>
+     Arm TTL seconds: <span class="pill">${p.arm_ttl_seconds}</span><br><br>
+     <b>Armed:</b> <span class="pill">${armed.active}</span>
+     ${armed.active ? `<br><small>Target: <code>${armed.target}</code><br>Expires: <code>${tsToLocal(armed.expires_at)}</code></small>` : ""}`;
 
   const tSel = document.getElementById("target");
   tSel.innerHTML = "";
   (s.eligible_targets || []).forEach(d => {
-    const label = `${d.path} (${d.size || ""} ${d.model || ""} ${d.serial || ""})`;
+    const label = `${d.path} (${d.size||""} ${d.model||""} ${d.serial||""})`;
     opt(tSel, d.path, label);
   });
 
@@ -115,12 +147,36 @@ async function loadOS(q=""){
     const os_id = document.getElementById("os").value;
     const r = await fetch("/api/plan_flash", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {"Content-Type":"application/json"},
       body: JSON.stringify({ target, os_id })
     });
     const data = await r.json();
+    lastPlan = { target, os_id, data };
     document.getElementById("planOut").innerHTML =
       `<b>Plan output:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+  });
+
+  document.getElementById("armBtn").addEventListener("click", async () => {
+    const target = tSel.value;
+    const os_id = document.getElementById("os").value;
+    const word = document.getElementById("word").value || "";
+    const confirm_target = document.getElementById("confirmTarget").value || "";
+    const serial_suffix = document.getElementById("serialSuffix").value || "";
+    const r = await fetch("/api/arm", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ target, os_id, word, confirm_target, serial_suffix })
+    });
+    const data = await r.json();
+    document.getElementById("armOut").innerHTML =
+      `<b>ARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+  });
+
+  document.getElementById("disarmBtn").addEventListener("click", async () => {
+    const r = await fetch("/api/disarm", { method: "POST" });
+    const data = await r.json();
+    document.getElementById("armOut").innerHTML =
+      `<b>DISARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
   });
 })();
 </script>
