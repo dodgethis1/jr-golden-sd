@@ -706,6 +706,53 @@ def api_job(job_id: str):
     # Don't spam huge logs in JSON; provide log path and let caller fetch tail via ssh if needed
     return jsonify({"ok": True, "job": job})
 
+
+@app.get("/api/job/<job_id>/tail")
+def api_job_tail(job_id):
+  import re
+  from pathlib import Path
+
+  # job_id is used to form a filename; keep it boring and safe.
+  if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id or ""):
+    return jsonify({"error": "invalid job_id"}), 400
+
+  try:
+    n = int(request.args.get("lines", "200"))
+  except Exception:
+    n = 200
+  n = max(1, min(n, 2000))
+
+  log_path = Path("cache/jobs") / f"{job_id}.log"
+  if not log_path.exists():
+    return jsonify({"job_id": job_id, "exists": False, "lines": []}), 404
+
+  max_bytes = 512 * 1024  # read last 512KB max
+  try:
+    with log_path.open("rb") as f:
+      f.seek(0, 2)
+      size = f.tell()
+      start = max(0, size - max_bytes)
+      f.seek(start)
+      data = f.read()
+  except Exception as e:
+    return jsonify({"job_id": job_id, "exists": True, "error": str(e)}), 500
+
+  text = data.decode("utf-8", errors="replace")
+  all_lines = text.splitlines()
+  lines = all_lines[-n:]
+  truncated = (len(all_lines) > len(lines)) or (start > 0)
+
+  st = log_path.stat()
+  return jsonify({
+    "job_id": job_id,
+    "exists": True,
+    "lines": lines,
+    "returned": len(lines),
+    "truncated": truncated,
+    "bytes_read": len(data),
+    "mtime": st.st_mtime,
+  })
+
 @app.get("/api/os_cache")
 def api_os_cache():
     os_id = request.args.get("os_id", "").strip()
