@@ -92,6 +92,15 @@ def safety_state() -> dict:
     for d in obj.get("blockdevices", []):
         if d.get("type") != "disk":
             continue
+
+        # Eligibility filtering (safety): ignore zram/loop/ram and anything without TRAN
+        name = (d.get("name") or "")
+        tran = d.get("tran")
+        if tran is None:
+            continue
+        if name.startswith(("zram", "loop", "ram")):
+            continue
+
         disks.append({
             "name": d.get("name"),
             "path": d.get("path"),
