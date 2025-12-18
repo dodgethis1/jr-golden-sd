@@ -81,3 +81,15 @@ Not allowed (default):
 - Served by Flask:
   - `/` -> `static/index.html`
   - `/assets/<path>` -> static files
+
+## UI map (single-file)
+- UI is one file: `static/index.html`
+- Served by Flask:
+  - `/` -> `static/index.html`
+  - `/assets/<path>` -> static files
+
+UI calls:
+- `/api/os`, `/api/health`, `/api/urls`, `/api/safety`
+- POST `/api/plan_flash` (dry-run)
+- POST `/api/download_os` (creates job)
+- `/api/job/<id>` and `/api/job/<id>/tail?lines=...` for monitoring

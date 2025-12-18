@@ -1,0 +1,9 @@
+# Normalize line endings in repo (avoid CRLF surprises)
+* text=auto eol=lf
+
+*.sh  text eol=lf
+*.py  text eol=lf
+*.md  text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.js  text eol=lf

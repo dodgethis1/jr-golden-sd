@@ -3,11 +3,11 @@
 We use SemVer tags for releases and `git describe` for build identity.
 
 ## Release tags (human)
-- Tags: `vMAJOR.MINOR.PATCH` (example: `v0.1.0`)
+- Tag format: `vMAJOR.MINOR.PATCH` (example: `v0.1.0`)
 - Tag only when:
-  - working tree is clean
-  - service restarts cleanly
-  - `/api/health` does NOT include `-dirty`
+  - worktree clean
+  - `./scripts/preflight.sh` passes
+  - `/api/health` does NOT show `git_dirty: true`
 
 ## Build identity (machine)
 `git describe --tags --dirty --always`
@@ -16,10 +16,15 @@ Examples:
 - `v0.1.0-3-gc80e171`
 - `v0.1.0-3-gc80e171-dirty`
 
-## /api/health fields
-- `version`
+## /api/health version fields
+- `version` (primary display string)
 - `semver`
 - `git_describe`
 - `git_commit`
 - `git_dirty`
-- `version_source`
+- `version_source` (`git` or `env`)
+
+## Release checklist
+1) `git status` is clean
+2) `./scripts/preflight.sh`
+3) `./scripts/tag-release.sh vX.Y.Z`

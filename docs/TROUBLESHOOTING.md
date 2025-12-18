@@ -26,3 +26,16 @@ It checks:
 - Python syntax (`py_compile`)
 - UI obvious breakage patterns
 - Service restart + `/api/health` comes back
+
+## SSH disconnect gotcha (interactive `set -e`)
+If you run `set -e` in an interactive SSH shell, any failing command exits your shell and drops SSH.
+Policy:
+- Interactive: `set -u` (and optional `pipefail`), handle failures explicitly.
+- Scripts: `set -euo pipefail`.
+
+Use `./scripts/preflight.sh` and `./scripts/health-wait.sh` instead of one-shot curls after restarts.
+
+## Restart window false-fails
+Immediately curling after `systemctl restart` can fail even when the service is fine.
+Use:
+- `./scripts/health-wait.sh http://127.0.0.1:8025/api/health 80 0.25`
