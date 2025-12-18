@@ -1,0 +1,7 @@
+{
+  "id": "rpi-imager-official",
+  "type": "imager_v4",
+  "enabled": true,
+  "url": "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json",
+  "label": "Raspberry Pi Imager (official)"
+}
