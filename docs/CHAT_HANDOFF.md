@@ -4,8 +4,8 @@ Recipient: ChatGPT (the assistant)
 
 Project: JR Golden SD (Pi 5 + Pi 4 compatible), headless-first provisioning SD with web UI.
 
-As of: 2025-12-18T09:56:12-06:00
-Version: c58b78e
+As of: 2025-12-18T10:02:53-06:00
+Version: c9e987d-dirty
 
 Read these files first:
 - docs/SPEC.md

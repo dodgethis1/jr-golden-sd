@@ -6,20 +6,33 @@
   <title>JR Golden SD</title>
   <style>
     body { font-family: system-ui, sans-serif; padding: 16px; }
-    .box { border: 1px solid #ccc; border-radius: 10px; padding: 12px; margin: 12px 0; }
+    .box { border: 1px solid #ccc; border-radius: 12px; padding: 12px; margin: 12px 0; }
     .warn { border-color: #b00; }
+    .mode { font-size: 22px; font-weight: 800; }
+    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background:#f3f3f3; }
     code { background: #f3f3f3; padding: 2px 6px; border-radius: 6px; }
     table { width: 100%; border-collapse: collapse; }
     td, th { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
-    .root { font-weight: 700; }
+    .root { font-weight: 800; }
+    img { max-width: 220px; height: auto; border: 1px solid #eee; border-radius: 12px; }
+    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+    @media (min-width: 800px) { .grid { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
   <h2>JR Golden SD</h2>
-  <div class="box" id="health">Loading health…</div>
-  <div class="box warn">
-    <b>Safety:</b> This build is read-only. No flashing features are enabled yet.
+
+  <div class="box" id="headline">Loading…</div>
+
+  <div class="grid">
+    <div class="box" id="urls">Loading URLs…</div>
+    <div class="box" id="qr">Loading QR…</div>
   </div>
+
+  <div class="box warn">
+    <b>Safety:</b> This build is <span class="pill">read-only</span>. Flashing is not implemented yet.
+  </div>
+
   <div class="box" id="disks">Loading disks…</div>
 
 <script>
@@ -27,13 +40,25 @@ async function j(url){ const r=await fetch(url); return await r.json(); }
 
 (async () => {
   const h = await j("/api/health");
-  document.getElementById("health").innerHTML =
-    `<b>Status:</b> OK<br>
-     <b>Version:</b> <code>${h.version}</code><br>
-     <b>Root source:</b> <code>${h.root_source || "unknown"}</code>`;
+  document.getElementById("headline").innerHTML =
+    `<div class="mode">MODE: <span class="pill">${h.mode}</span></div>
+     <div><b>Version:</b> <code>${h.version}</code></div>
+     <div><b>Root source:</b> <code>${h.root_source || "unknown"}</code></div>
+     <div><b>Root parent:</b> <code>/dev/${h.root_parent || "unknown"}</code></div>`;
+
+  const u = await j("/api/urls");
+  const list = (u.urls || []).map(x => `<li><a href="${x}">${x}</a></li>`).join("");
+  document.getElementById("urls").innerHTML =
+    `<b>Open this from your phone/PC:</b>
+     <ul>${list || "<li>(no URLs detected)</li>"}</ul>`;
+
+  const first = (u.urls && u.urls[0]) ? u.urls[0] : location.origin + "/";
+  document.getElementById("qr").innerHTML =
+    `<b>QR (scan me):</b><br>
+     <img src="/api/qr?u=${encodeURIComponent(first)}" alt="QR code"><br>
+     <small><code>${first}</code></small>`;
 
   const d = await j("/api/disks");
-  const rootParent = d.root_parent || "unknown";
   const rows = (d.lsblk.blockdevices || [])
     .filter(x => x.type === "disk")
     .map(x => {
@@ -49,8 +74,7 @@ async function j(url){ const r=await fetch(url); return await r.json(); }
     }).join("");
 
   document.getElementById("disks").innerHTML =
-    `<b>Root disk:</b> <code>/dev/${rootParent}</code><br><br>
-     <table>
+    `<table>
       <thead><tr><th>Disk</th><th>Tran</th><th>Size</th><th>Model</th><th>Serial</th></tr></thead>
       <tbody>${rows || "<tr><td colspan=5>No disks found</td></tr>"}</tbody>
      </table>`;
