@@ -16,3 +16,10 @@ __pycache__/
 
 # ignore policy backup snapshots
 data/policy.json.bak.*
+
+# ignore local backups
+app/app.py.bak.*
+static/index.html.bak.*
+
+# backups
+*.bak.*
