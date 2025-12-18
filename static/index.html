@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>JR Golden SD</title>
+  <style>
+    body { font-family: system-ui, sans-serif; padding: 16px; }
+    .box { border: 1px solid #ccc; border-radius: 10px; padding: 12px; margin: 12px 0; }
+    .warn { border-color: #b00; }
+    code { background: #f3f3f3; padding: 2px 6px; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    td, th { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
+    .root { font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h2>JR Golden SD</h2>
+  <div class="box" id="health">Loading health…</div>
+  <div class="box warn">
+    <b>Safety:</b> This build is read-only. No flashing features are enabled yet.
+  </div>
+  <div class="box" id="disks">Loading disks…</div>
+
+<script>
+async function j(url){ const r=await fetch(url); return await r.json(); }
+
+(async () => {
+  const h = await j("/api/health");
+  document.getElementById("health").innerHTML =
+    `<b>Status:</b> OK<br>
+     <b>Version:</b> <code>${h.version}</code><br>
+     <b>Root source:</b> <code>${h.root_source || "unknown"}</code>`;
+
+  const d = await j("/api/disks");
+  const rootParent = d.root_parent || "unknown";
+  const rows = (d.lsblk.blockdevices || [])
+    .filter(x => x.type === "disk")
+    .map(x => {
+      const rootTag = x.is_root_disk ? ` class="root"` : "";
+      const rootTxt = x.is_root_disk ? " (ROOT DISK - BLOCKED)" : "";
+      return `<tr${rootTag}>
+        <td><code>${x.path}</code>${rootTxt}</td>
+        <td>${x.tran || ""}</td>
+        <td>${x.size || ""}</td>
+        <td>${x.model || ""}</td>
+        <td>${x.serial || ""}</td>
+      </tr>`;
+    }).join("");
+
+  document.getElementById("disks").innerHTML =
+    `<b>Root disk:</b> <code>/dev/${rootParent}</code><br><br>
+     <table>
+      <thead><tr><th>Disk</th><th>Tran</th><th>Size</th><th>Model</th><th>Serial</th></tr></thead>
+      <tbody>${rows || "<tr><td colspan=5>No disks found</td></tr>"}</tbody>
+     </table>`;
+})();
+</script>
+</body>
+</html>
