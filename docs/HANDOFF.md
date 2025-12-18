@@ -75,3 +75,9 @@ Not allowed (default):
   - `/api/job/<job_id>` for status
   - `/api/job/<job_id>/tail?lines=200` for live logs
 - Goal: live job view without any disk-write capabilities.
+
+## UI map (critical)
+- Frontend is a single file: `static/index.html`
+- Served by Flask:
+  - `/` -> `static/index.html`
+  - `/assets/<path>` -> static files

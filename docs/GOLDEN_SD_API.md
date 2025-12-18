@@ -54,3 +54,17 @@ POST /api/flash   (DESTRUCTIVE)
 
 GET  /api/qr?u=...
   -> QR code PNG for URL
+
+## GET /api/job/<job_id>/tail?lines=200
+Read-only log tail for a job.
+
+- Purpose: UI can show live logs without shell access.
+- Params:
+  - `lines` (optional, default 200, max 2000)
+- Returns:
+  - `lines`: array of strings (log lines)
+  - `truncated`: bool (true if older content was dropped)
+  - `mtime`: float (mtime epoch seconds)
+- Errors:
+  - 404 if log does not exist
+  - 400 on invalid job_id

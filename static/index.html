@@ -17,7 +17,10 @@
     @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .row > * { flex: 1 1 220px; }
-  </style>
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .log { max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
+      .small { font-size: 12px; opacity: 0.85; }
+    </style>
 </head>
 <body>
   <h2>JR Golden SD</h2>
@@ -80,6 +83,29 @@
     <div id="armOut" style="margin-top:12px;"></div>
   </div>
 
+    <div class="box" id="jobbox">
+      <b>Job monitor:</b> <span class="pill" id="jobState">idle</span><br>
+      <small class="small">Watches <code>/api/job/&lt;id&gt;</code> and tails logs via <code>/api/job/&lt;id&gt;/tail</code> (read-only).</small><br><br>
+
+      <div class="row">
+        <label>Job ID:<br>
+          <input id="jobId" placeholder="paste job_id here" style="width:100%">
+        </label>
+
+        <div>
+          <br>
+          <button id="followJobBtn">Follow job</button>
+          <button id="stopJobBtn">Stop</button>
+        </div>
+      </div>
+
+      <div id="jobStatus" style="margin-top:12px;"></div>
+      <div style="margin-top:12px;"><b>Live log (last 200 lines):</b></div>
+      <pre id="jobLog" class="log mono"></pre>
+    </div>
+
+
+
 <script>
 async function j(url){ const r=await fetch(url); return await r.json(); }
 function opt(el, value, text){
@@ -101,6 +127,108 @@ function tsToLocal(ts){
 }
 
 let lastPlan = null;
+  // --- Job monitor (status + live log tail) ---
+  let pollTimer = null;
+
+  function setJobState(txt){
+    const el = document.getElementById("jobState");
+    if (el) el.textContent = txt;
+  }
+
+  function isNearBottom(el, slack=24){
+    try { return (el.scrollTop + el.clientHeight + slack) >= el.scrollHeight; } catch { return true; }
+  }
+
+  function stopJobPoll(){
+    if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    setJobState("idle");
+  }
+
+  function guessState(job){
+    if (!job || typeof job !== "object") return "unknown";
+    const s = job.state || job.status || job.phase || job.result;
+    if (typeof s === "string") return s;
+    if (job.ok === false) return "error";
+    if (job.exit_code !== undefined && job.exit_code !== null) return (job.exit_code === 0 ? "success" : "failed");
+    if (job.done === true) return "done";
+    if (job.pid) return "running";
+    return "unknown";
+  }
+
+  function formatJobSummary(job){
+    if (!job || typeof job !== "object") return "";
+    const parts = [];
+    if (job.id) parts.push("id=" + job.id);
+    if (job.type) parts.push("type=" + job.type);
+    if (job.pid) parts.push("pid=" + job.pid);
+    if (job.exit_code !== undefined && job.exit_code !== null) parts.push("exit_code=" + job.exit_code);
+    if (job.created_at) parts.push("created=" + tsToLocal(job.created_at));
+    if (job.updated_at) parts.push("updated=" + tsToLocal(job.updated_at));
+    if (job.started_at) parts.push("started=" + tsToLocal(job.started_at));
+    if (job.ended_at) parts.push("ended=" + tsToLocal(job.ended_at));
+    return parts.join(" • ");
+  }
+
+  async function pollJobOnce(jobId){
+    const statusEl = document.getElementById("jobStatus");
+    const logEl = document.getElementById("jobLog");
+    if (!statusEl || !logEl) return;
+
+    // status
+    let job = null;
+    try {
+      const r = await fetch("/api/job/" + encodeURIComponent(jobId));
+      if (!r.ok) {
+        const t = await r.text();
+        setJobState("HTTP " + r.status);
+        statusEl.innerHTML = `<b>Status:</b> <span class="pill">HTTP ${r.status}</span><pre>${t}</pre>`;
+        return;
+      }
+      job = await r.json();
+    } catch (e) {
+      setJobState("error");
+      statusEl.innerHTML = `<b>Status:</b> <span class="pill">error</span><pre>${String(e)}</pre>`;
+      return;
+    }
+
+    const state = guessState(job);
+    setJobState(state);
+
+    statusEl.innerHTML =
+      `<b>Status:</b> <span class="pill">${state}</span><br>` +
+      `<small class="small">${formatJobSummary(job)}</small>` +
+      `<pre>${JSON.stringify(job, null, 2)}</pre>`;
+
+    // log tail
+    try {
+      const r2 = await fetch("/api/job/" + encodeURIComponent(jobId) + "/tail?lines=200");
+      if (r2.ok) {
+        const tail = await r2.json();
+        const wasNear = isNearBottom(logEl);
+        logEl.textContent = (tail.lines || []).join("\n");
+        if (wasNear) logEl.scrollTop = logEl.scrollHeight;
+      }
+    } catch {
+      // ignore log errors
+    }
+
+    // stop polling when done-ish
+    if (state === "success" || state === "failed" || state === "done") {
+      if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+    }
+  }
+
+  function startJobFollow(jobId){
+    jobId = (jobId || "").trim();
+    if (!jobId) return;
+    stopJobPoll();
+    const jobIdEl = document.getElementById("jobId");
+    if (jobIdEl) jobIdEl.value = jobId;
+    setJobState("starting");
+    pollJobOnce(jobId);
+    pollTimer = setInterval(() => pollJobOnce(jobId), 1500);
+  }
+
 
 (async () => {
   const h = await j("/api/health");
@@ -194,6 +322,20 @@ document.getElementById("disarmBtn").addEventListener("click", async () => {
       `<b>DISARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
   });
 })();
-</script>
+
+  // Job monitor buttons
+  try {
+    document.getElementById("followJobBtn").addEventListener("click", async () => {
+      const id = (document.getElementById("jobId").value || "").trim();
+      startJobFollow(id);
+    });
+    document.getElementById("stopJobBtn").addEventListener("click", async () => {
+      stopJobPoll();
+    });
+  } catch (e) {
+    console.warn("job monitor wiring failed:", e);
+  }
+
+  </script>
 </body>
 </html>
