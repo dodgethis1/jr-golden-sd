@@ -559,6 +559,144 @@ def disarm():
     return jsonify({"ok": True, "armed": False})
 
 
+
+@app.post("/api/flash")
+def api_flash():
+    """
+    DESTRUCTIVE: Writes a cached OS image to a target disk.
+    Requires:
+      - SD mode (safety_state().can_flash_here)
+      - policy.flash_enabled == true
+      - valid, unexpired ARM token matching target + os_id
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    target = str(body.get("target", "")).strip()
+    os_id = str(body.get("os_id", "")).strip()
+    token = str(body.get("token", "")).strip()
+    confirm_target = str(body.get("confirm_target", "")).strip()
+    serial_suffix = str(body.get("serial_suffix", "")).strip()
+
+    pol = load_policy()
+    if not bool(pol.get("flash_enabled", False)):
+        return jsonify({"ok": False, "error": "Flashing is disabled (policy.flash_enabled=false)."}), 403
+
+    sstate = safety_state()
+    eligible = {x["path"]: x for x in sstate["eligible_targets"]}
+
+    if not sstate["can_flash_here"]:
+        return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
+    if not target or target not in eligible:
+        return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
+    if confirm_target and confirm_target != target:
+        return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
+
+    armed = load_arm_state()
+    if not armed:
+        return jsonify({"ok": False, "error": "Not armed. Call /api/arm first."}), 400
+
+    now = time.time()
+    exp = float(armed.get("expires_at") or 0)
+    if exp <= now:
+        clear_arm_state()
+        return jsonify({"ok": False, "error": "ARM token expired. Re-arm and try again."}), 400
+
+    if armed.get("target") != target:
+        return jsonify({"ok": False, "error": "ARM state target does not match requested target."}), 400
+
+    if not os_id:
+        os_id = str(armed.get("os_id") or "").strip()
+    if not os_id:
+        return jsonify({"ok": False, "error": "os_id required (and must match what you armed with)."}), 400
+    if armed.get("os_id") and armed.get("os_id") != os_id:
+        return jsonify({"ok": False, "error": "ARM state os_id does not match requested os_id."}), 400
+
+    if not token or token != str(armed.get("token") or ""):
+        return jsonify({"ok": False, "error": "Invalid or missing token. Use the token returned by /api/arm."}), 400
+
+    if serial_suffix:
+        actual = (eligible[target].get("serial") or "")
+        if actual and not actual.endswith(serial_suffix):
+            return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
+
+    catalog = load_os_catalog()
+    os_item = find_os(os_id, catalog)
+    if not os_item:
+        return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
+
+    url = os_item["url"]
+    paths = os_cache_paths(os_id, url)
+    in_path = paths["bin"]
+
+    if not os.path.exists(in_path):
+        return jsonify({"ok": False, "error": "OS image not cached. Call /api/download_os first.", "paths": paths}), 400
+
+    # One-shot: disarm immediately so the token can't be reused.
+    clear_arm_state()
+
+    script = f"""
+echo "=== FLASH JOB ==="
+echo "TARGET={shlex_quote(target)}"
+echo "IN={shlex_quote(in_path)}"
+echo "URL={shlex_quote(url)}"
+
+TARGET={shlex_quote(target)}
+IN={shlex_quote(in_path)}
+URL={shlex_quote(url)}
+
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+  SUDO="sudo -n"
+fi
+
+if [ ! -b "$TARGET" ]; then
+  echo "ERROR: target is not a block device: $TARGET"
+  exit 10
+fi
+if [ ! -f "$IN" ]; then
+  echo "ERROR: cached image missing: $IN"
+  exit 11
+fi
+
+echo
+echo "=== Unmount anything mounted on target (if any) ==="
+lsblk -nrpo NAME,MOUNTPOINT "$TARGET" | awk 'NF>=2 && $2!="" {{print $1}}' | while read -r dev; do
+  echo "umount $dev"
+  $SUDO umount "$dev" 2>/dev/null || true
+done
+
+echo
+echo "=== Write image to target (DESTROYS DATA) ==="
+if [[ "$URL" == *.xz ]]; then
+  command -v xz >/dev/null || {{ echo "ERROR: xz not installed"; exit 20; }}
+  xz -dc "$IN" | $SUDO dd of="$TARGET" bs=4M conv=fsync status=progress
+elif [[ "$URL" == *.gz ]]; then
+  command -v gzip >/dev/null || {{ echo "ERROR: gzip not installed"; exit 21; }}
+  gzip -dc "$IN" | $SUDO dd of="$TARGET" bs=4M conv=fsync status=progress
+elif [[ "$URL" == *.zip ]]; then
+  command -v unzip >/dev/null || {{ echo "ERROR: unzip not installed"; exit 22; }}
+  unzip -p "$IN" | $SUDO dd of="$TARGET" bs=4M conv=fsync status=progress
+else
+  cat "$IN" | $SUDO dd of="$TARGET" bs=4M conv=fsync status=progress
+fi
+
+echo
+echo "=== Sync + re-read partitions ==="
+$SUDO sync
+$SUDO partprobe "$TARGET" 2>/dev/null || true
+$SUDO udevadm settle 2>/dev/null || true
+echo "=== FLASH COMPLETE ==="
+"""
+
+    job = start_job("flash", script, {
+        "os_id": os_id,
+        "url": url,
+        "in": in_path,
+        "target": target,
+        "paths": paths,
+    })
+    return jsonify({"ok": True, "job_id": job["id"], "job": job, "paths": paths})
+
+
 @app.get("/api/job/<job_id>")
 def api_job(job_id: str):
     job = job_load(job_id)
