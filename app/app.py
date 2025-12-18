@@ -367,6 +367,35 @@ def job_refresh(job: dict) -> dict:
             job["status"] = "success" if rc == 0 else "failed"
             job["exit_code"] = rc if rc is not None else 1
             job_save(job)
+    # JOB_STATUS_RC_WINS_JOB_REFRESH: rc file wins when present
+    try:
+        import re
+        from pathlib import Path
+        if isinstance(job, dict):
+            _jid = job.get('id') or job.get('job_id')
+            _jid = str(_jid) if _jid is not None else ''
+            if _jid and re.fullmatch(r"[A-Za-z0-9_-]+", _jid):
+                rc_path = Path('cache/jobs') / (_jid + '.rc')
+                if rc_path.exists():
+                    rc_txt = rc_path.read_text(encoding='utf-8', errors='ignore').strip()
+                    try:
+                        rc_val = int(rc_txt)
+                    except Exception:
+                        rc_val = None
+                    job['exit_code'] = rc_val
+                    job['rc'] = rc_val
+                    job['status'] = 'success' if rc_val == 0 else 'failed'
+                    job['done'] = True
+                else:
+                    if job.get('status') == 'running':
+                        pid = job.get('pid')
+                        if isinstance(pid, int) and (Path('/proc') / str(pid)).exists():
+                            job['status'] = 'running'
+                        else:
+                            job['status'] = 'stale'
+    except Exception as e:
+        if isinstance(job, dict):
+            job.setdefault('status_note', 'status_enrich_error: ' + str(e))
     return job
 
 def start_job(job_type: str, script_body: str, meta: dict) -> dict:
@@ -745,6 +774,10 @@ echo "=== FLASH COMPLETE ==="
 
 @app.get("/api/job/<job_id>")
 def api_job(job_id: str):
+    # JOB_ID_VALIDATE_API_JOB: job_id is used to form filenames; keep it boring
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id or ""):
+        return jsonify({"ok": False, "error": "invalid job_id"}), 400
     job = job_load(job_id)
     if not job:
         return jsonify({"ok": False, "error": "Unknown job id"}), 404
