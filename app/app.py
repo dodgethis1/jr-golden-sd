@@ -9,6 +9,22 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
 
+def load_policy() -> dict:
+    # One-word, ALL-CAPS safety token for any destructive write operations
+    default_word = os.environ.get("JR_WRITE_WORD", "ERASE").strip().upper() or "ERASE"
+    pol = {"write_word": default_word}
+    try:
+        path = os.path.join(BASE_DIR, "data", "policy.json")
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+            w = str(obj.get("write_word", default_word)).strip().upper() or default_word
+            pol["write_word"] = w
+    except Exception:
+        pass
+    return pol
+
+
 def sh(cmd: list[str]) -> str:
     return subprocess.check_output(cmd, text=True).strip()
 
@@ -250,6 +266,7 @@ def safety():
             "can_flash_here": s["can_flash_here"],
             "root_disk_blocked": True,
             "requires_sd_mode": True,
+        "write_word": load_policy().get("write_word","ERASE")
         },
         "state": {
             "mode": s["mode"],
@@ -305,6 +322,10 @@ def api_plan_flash():
             "extract_size": os_item.get("extract_size"),
             "init_format": os_item.get("init_format"),
         },
+        "confirmations": [
+            {"type":"WORD","value": load_policy().get("write_word","ERASE"), "note":"One-word ALL-CAPS write safety token"},
+            {"type":"TARGET","value": target, "note":"Target must match exactly"}
+        ],
         "steps": [
             {"step": 1, "action": "Re-check safety", "detail": "Confirm target is not the root disk and SD mode is active."},
             {"step": 2, "action": "Download image", "detail": f"curl -L '{url}' -o cache/os.img (or cache/os.img.xz/zip)"},
