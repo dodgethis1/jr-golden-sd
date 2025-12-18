@@ -29,10 +29,9 @@
     <div class="box" id="qr">Loading QR…</div>
   </div>
 
-  <div class="box warn">
-    <b>Safety:</b> This build is <span class="pill">read-only</span>. Flashing is not implemented yet.
-  </div>
+  <div class="box warn" id="policy">Loading policy…</div>
 
+  <div class="box" id="targets">Loading eligible targets…</div>
   <div class="box" id="disks">Loading disks…</div>
 
 <script>
@@ -58,6 +57,33 @@ async function j(url){ const r=await fetch(url); return await r.json(); }
      <img src="/api/qr?u=${encodeURIComponent(first)}" alt="QR code"><br>
      <small><code>${first}</code></small>`;
 
+  const s = await j("/api/safety");
+  const p = s.policy;
+  document.getElementById("policy").innerHTML =
+    `<b>Safety policy:</b><br>
+     Flash enabled: <span class="pill">${p.flash_enabled}</span><br>
+     Can flash here (must be SD mode): <span class="pill">${p.can_flash_here}</span><br>
+     Root disk blocked: <span class="pill">${p.root_disk_blocked}</span>`;
+
+  const trows = (s.eligible_targets || []).map(x =>
+    `<tr>
+      <td><code>${x.path}</code></td>
+      <td>${x.tran || ""}</td>
+      <td>${x.size || ""}</td>
+      <td>${x.model || ""}</td>
+      <td>${x.serial || ""}</td>
+    </tr>`
+  ).join("");
+
+  document.getElementById("targets").innerHTML =
+    `<b>Eligible targets (NOT the boot disk):</b><br><br>
+     <table>
+      <thead><tr><th>Disk</th><th>Tran</th><th>Size</th><th>Model</th><th>Serial</th></tr></thead>
+      <tbody>${trows || "<tr><td colspan=5>(none)</td></tr>"}</tbody>
+     </table>
+     <br>
+     <small>Still read-only. Next step is adding a "plan flash" dry-run before real flashing exists.</small>`;
+
   const d = await j("/api/disks");
   const rows = (d.lsblk.blockdevices || [])
     .filter(x => x.type === "disk")
@@ -74,7 +100,8 @@ async function j(url){ const r=await fetch(url); return await r.json(); }
     }).join("");
 
   document.getElementById("disks").innerHTML =
-    `<table>
+    `<b>All disks:</b><br><br>
+     <table>
       <thead><tr><th>Disk</th><th>Tran</th><th>Size</th><th>Model</th><th>Serial</th></tr></thead>
       <tbody>${rows || "<tr><td colspan=5>No disks found</td></tr>"}</tbody>
      </table>`;

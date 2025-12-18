@@ -29,7 +29,6 @@ def parent_disk(devpath: str) -> str:
         pk = sh(["lsblk", "-no", "PKNAME", f"/dev/{dev}"])
         return pk.strip()
     except Exception:
-        # fallback: strip partition suffixes
         return dev.rstrip("0123456789").rstrip("p")
 
 def detect_mode() -> dict:
@@ -41,7 +40,6 @@ def detect_mode() -> dict:
     elif parent.startswith("nvme"):
         mode = "NVMe"
     else:
-        # try transport hint
         try:
             tran = sh(["lsblk", "-no", "TRAN", f"/dev/{parent}"]).strip().lower()
             if tran == "usb":
@@ -55,15 +53,12 @@ def list_urls(port: int) -> list[str]:
     try:
         out = sh(["ip", "-br", "a"])
         for line in out.splitlines():
-            # e.g. "eth0 UP 192.168.0.53/24 fe80::..."
             parts = line.split()
             if len(parts) < 3:
                 continue
-            iface = parts[0]
             state = parts[1]
             if state != "UP":
                 continue
-            # find IPv4s
             for p in parts[2:]:
                 if re.match(r"^\d+\.\d+\.\d+\.\d+/\d+$", p):
                     ip4 = p.split("/")[0]
@@ -73,28 +68,56 @@ def list_urls(port: int) -> list[str]:
     except Exception:
         pass
 
-    # mDNS guess (only helpful if avahi works on your LAN)
     host = os.environ.get("HOSTNAME", "").strip()
     if host:
         urls.append(f"http://{host}.local:{port}/")
 
-    # de-dupe while preserving order
-    seen = set()
-    out = []
+    seen, out = set(), []
     for u in urls:
         if u not in seen:
             seen.add(u)
             out.append(u)
     return out
 
+def list_disks() -> dict:
+    cols = "NAME,KNAME,PATH,MODEL,SERIAL,SIZE,TYPE,TRAN,MOUNTPOINT,FSTYPE,ROTA,RM"
+    raw = sh(["lsblk", "-J", "-o", cols])
+    obj = json.loads(raw)
+
+    m = detect_mode()
+    root_parent = m["root_parent"]
+
+    disks = []
+    for d in obj.get("blockdevices", []):
+        if d.get("type") != "disk":
+            continue
+        disks.append({
+            "name": d.get("name"),
+            "path": d.get("path"),
+            "tran": d.get("tran"),
+            "size": d.get("size"),
+            "model": d.get("model"),
+            "serial": d.get("serial"),
+            "rm": d.get("rm"),
+            "rota": d.get("rota"),
+            "is_root_disk": (d.get("name") == root_parent),
+        })
+
+    eligible = [x for x in disks if not x["is_root_disk"]]
+    return {
+        "mode": m["mode"],
+        "root_source": m["root_source"],
+        "root_parent": root_parent,
+        "disks": disks,
+        "eligible_targets": eligible,
+        # Policy: only allow flashing when booted from SD (Golden SD environment).
+        "can_flash_here": (m["mode"] == "SD"),
+    }
+
 @app.get("/api/health")
 def health():
     m = detect_mode()
-    return jsonify({
-        "ok": True,
-        "version": get_version(),
-        **m
-    })
+    return jsonify({"ok": True, "version": get_version(), **m})
 
 @app.get("/api/urls")
 def api_urls():
@@ -102,6 +125,7 @@ def api_urls():
 
 @app.get("/api/disks")
 def disks():
+    # kept for backward-compat
     cols = "NAME,KNAME,PATH,MODEL,SERIAL,SIZE,TYPE,TRAN,MOUNTPOINT,FSTYPE,ROTA,RM"
     raw = sh(["lsblk", "-J", "-o", cols])
     obj = json.loads(raw)
@@ -110,20 +134,33 @@ def disks():
     for d in obj.get("blockdevices", []):
         if d.get("type") == "disk":
             d["is_root_disk"] = (d.get("name") == root_parent)
+    return jsonify({"root_source": rs, "root_parent": root_parent, "lsblk": obj})
+
+@app.get("/api/safety")
+def safety():
+    s = list_disks()
     return jsonify({
-        "root_source": rs,
-        "root_parent": root_parent,
-        "lsblk": obj,
+        "version": get_version(),
+        "policy": {
+            "flash_enabled": False,  # still read-only build
+            "can_flash_here": s["can_flash_here"],
+            "root_disk_blocked": True,
+            "requires_sd_mode": True,
+        },
+        "state": {
+            "mode": s["mode"],
+            "root_source": s["root_source"],
+            "root_parent": s["root_parent"],
+        },
+        "eligible_targets": s["eligible_targets"],
     })
 
 @app.get("/api/qr")
 def api_qr():
-    # Generates a QR PNG for the provided URL, or first detected URL.
     url = request.args.get("u", "").strip()
     if not url:
         urls = list_urls(APP_PORT)
         url = urls[0] if urls else f"http://127.0.0.1:{APP_PORT}/"
-
     import qrcode
     img = qrcode.make(url)
     buf = io.BytesIO()
@@ -137,6 +174,3 @@ def index():
 @app.get("/assets/<path:p>")
 def assets(p):
     return send_from_directory(app.static_folder, p)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=APP_PORT)
