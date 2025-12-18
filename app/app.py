@@ -9,8 +9,11 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
 
+def sh(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, text=True).strip()
+
 def load_policy() -> dict:
-    # One-word, ALL-CAPS safety token for any destructive write operations
+    # One-word, ALL-CAPS safety token for destructive writes
     default_word = os.environ.get("JR_WRITE_WORD", "ERASE").strip().upper() or "ERASE"
     pol = {"write_word": default_word}
     try:
@@ -23,10 +26,6 @@ def load_policy() -> dict:
     except Exception:
         pass
     return pol
-
-
-def sh(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True).strip()
 
 def get_version() -> str:
     try:
@@ -85,6 +84,7 @@ def list_urls(port: int) -> list[str]:
                     urls.append(f"http://{ip4}:{port}/")
     except Exception:
         pass
+
     host = os.environ.get("HOSTNAME", "").strip()
     if host:
         urls.append(f"http://{host}.local:{port}/")
@@ -95,6 +95,110 @@ def list_urls(port: int) -> list[str]:
             seen.add(u)
             out.append(u)
     return out
+
+def cache_get(url: str, cache_name: str, ttl_seconds: int = 6*3600) -> bytes:
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cpath = os.path.join(CACHE_DIR, cache_name)
+    now = time.time()
+
+    if os.path.exists(cpath):
+        age = now - os.path.getmtime(cpath)
+        if age < ttl_seconds:
+            with open(cpath, "rb") as f:
+                return f.read()
+
+    req = Request(url, headers={"User-Agent": "jr-golden-sd/0.1"})
+    try:
+        with urlopen(req, timeout=20) as r:
+            data = r.read()
+        with open(cpath, "wb") as f:
+            f.write(data)
+        return data
+    except URLError:
+        if os.path.exists(cpath):
+            with open(cpath, "rb") as f:
+                return f.read()
+        raise
+
+def slug_id(provider_id: str, url: str, name: str) -> str:
+    h = hashlib.sha1((url + "|" + name).encode("utf-8")).hexdigest()[:10]
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40]
+    return f"{provider_id}:{base}:{h}"
+
+def flatten_imager_os(obj) -> list[dict]:
+    out = []
+    def walk(node):
+        if isinstance(node, dict):
+            if "url" in node and isinstance(node.get("url"), str):
+                out.append(node)
+            elif "subitems" in node and isinstance(node.get("subitems"), list):
+                for s in node["subitems"]:
+                    walk(s)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+    walk(obj.get("os_list", []))
+    return out
+
+def read_provider_files() -> list[dict]:
+    pdir = os.path.join(BASE_DIR, "data", "os-providers")
+    providers = []
+    if not os.path.isdir(pdir):
+        return providers
+    for fn in sorted(os.listdir(pdir)):
+        if fn.endswith(".json"):
+            path = os.path.join(pdir, fn)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    obj = json.load(f)
+                if obj.get("enabled", True):
+                    providers.append(obj)
+            except Exception:
+                continue
+    return providers
+
+def load_os_catalog() -> list[dict]:
+    providers = read_provider_files()
+    all_items = []
+    for p in providers:
+        if p.get("type") == "imager_v4":
+            data = cache_get(p["url"], f"{p['id']}.json", ttl_seconds=6*3600)
+            repo = json.loads(data.decode("utf-8", errors="replace"))
+            items = flatten_imager_os(repo)
+            for it in items:
+                name = it.get("name", "unknown")
+                os_id = slug_id(p["id"], it.get("url", ""), name)
+                all_items.append({
+                    "id": os_id,
+                    "provider_id": p["id"],
+                    "provider_label": p.get("label", p["id"]),
+                    "name": name,
+                    "description": it.get("description", ""),
+                    "url": it.get("url"),
+                    "image_download_size": it.get("image_download_size"),
+                    "image_download_sha256": it.get("image_download_sha256"),
+                    "extract_size": it.get("extract_size"),
+                    "extract_sha256": it.get("extract_sha256"),
+                    "release_date": it.get("release_date"),
+                    "devices": it.get("devices", []),
+                    "init_format": it.get("init_format"),
+                })
+    all_items.sort(key=lambda x: (x["provider_id"], x["name"]))
+    return all_items
+
+def find_os(os_id: str, catalog: list[dict]) -> dict | None:
+    for it in catalog:
+        if it["id"] == os_id:
+            return it
+    return None
+
+def guess_decompress_cmd(url: str) -> str:
+    u = (url or "").lower()
+    if u.endswith(".img.xz") or u.endswith(".xz"):
+        return "xz -dc"
+    if u.endswith(".zip"):
+        return "unzip -p"
+    return "(unknown extractor)"
 
 def safety_state() -> dict:
     cols = "NAME,KNAME,PATH,MODEL,SERIAL,SIZE,TYPE,TRAN,MOUNTPOINT,FSTYPE,ROTA,RM"
@@ -109,7 +213,7 @@ def safety_state() -> dict:
         if d.get("type") != "disk":
             continue
 
-        # Eligibility filtering (safety): ignore zram/loop/ram and anything without TRAN
+        # Safety: ignore zram/loop/ram and anything without a transport
         name = (d.get("name") or "")
         tran = d.get("tran")
         if tran is None:
@@ -139,114 +243,6 @@ def safety_state() -> dict:
         "can_flash_here": (m["mode"] == "SD"),
     }
 
-def read_provider_files() -> list[dict]:
-    pdir = os.path.join(BASE_DIR, "data", "os-providers")
-    providers = []
-    if not os.path.isdir(pdir):
-        return providers
-    for fn in sorted(os.listdir(pdir)):
-        if not fn.endswith(".json"):
-            continue
-        path = os.path.join(pdir, fn)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-            if obj.get("enabled", True):
-                providers.append(obj)
-        except Exception:
-            continue
-    return providers
-
-def cache_get(url: str, cache_name: str, ttl_seconds: int = 6*3600) -> bytes:
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cpath = os.path.join(CACHE_DIR, cache_name)
-    now = time.time()
-
-    if os.path.exists(cpath):
-        age = now - os.path.getmtime(cpath)
-        if age < ttl_seconds:
-            with open(cpath, "rb") as f:
-                return f.read()
-
-    req = Request(url, headers={"User-Agent": "jr-golden-sd/0.1"})
-    try:
-        with urlopen(req, timeout=20) as r:
-            data = r.read()
-        with open(cpath, "wb") as f:
-            f.write(data)
-        return data
-    except URLError:
-        # fallback to stale cache if present
-        if os.path.exists(cpath):
-            with open(cpath, "rb") as f:
-                return f.read()
-        raise
-
-def slug_id(provider_id: str, url: str, name: str) -> str:
-    h = hashlib.sha1((url + "|" + name).encode("utf-8")).hexdigest()[:10]
-    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40]
-    return f"{provider_id}:{base}:{h}"
-
-def flatten_imager_os(obj) -> list[dict]:
-    out = []
-    def walk(node):
-        if isinstance(node, dict):
-            if "url" in node and isinstance(node.get("url"), str):
-                out.append(node)
-            elif "subitems" in node and isinstance(node.get("subitems"), list):
-                for s in node["subitems"]:
-                    walk(s)
-        elif isinstance(node, list):
-            for x in node:
-                walk(x)
-    walk(obj.get("os_list", []))
-    return out
-
-def load_os_catalog() -> list[dict]:
-    providers = read_provider_files()
-    all_items = []
-    for p in providers:
-        if p.get("type") == "imager_v4":
-            url = p["url"]
-            data = cache_get(url, f"{p['id']}.json", ttl_seconds=6*3600)
-            repo = json.loads(data.decode("utf-8", errors="replace"))
-            items = flatten_imager_os(repo)
-            for it in items:
-                name = it.get("name", "unknown")
-                os_id = slug_id(p["id"], it.get("url", ""), name)
-                all_items.append({
-                    "id": os_id,
-                    "provider_id": p["id"],
-                    "provider_label": p.get("label", p["id"]),
-                    "name": name,
-                    "description": it.get("description", ""),
-                    "url": it.get("url"),
-                    "image_download_size": it.get("image_download_size"),
-                    "image_download_sha256": it.get("image_download_sha256"),
-                    "extract_size": it.get("extract_size"),
-                    "extract_sha256": it.get("extract_sha256"),
-                    "release_date": it.get("release_date"),
-                    "devices": it.get("devices", []),
-                    "init_format": it.get("init_format"),
-                })
-    # Keep list stable-ish and not insane: sort by provider then name
-    all_items.sort(key=lambda x: (x["provider_id"], x["name"]))
-    return all_items
-
-def find_os(os_id: str, catalog: list[dict]) -> dict | None:
-    for it in catalog:
-        if it["id"] == os_id:
-            return it
-    return None
-
-def guess_decompress_cmd(url: str) -> str:
-    u = url.lower()
-    if u.endswith(".img.xz") or u.endswith(".xz"):
-        return "xz -dc"
-    if u.endswith(".zip"):
-        return "unzip -p"
-    return "(unknown extractor)"
-
 @app.get("/api/health")
 def health():
     m = detect_mode()
@@ -259,14 +255,15 @@ def api_urls():
 @app.get("/api/safety")
 def safety():
     s = safety_state()
+    pol = load_policy()
     return jsonify({
         "version": get_version(),
         "policy": {
-            "flash_enabled": False,  # still read-only build
+            "flash_enabled": False,
             "can_flash_here": s["can_flash_here"],
             "root_disk_blocked": True,
             "requires_sd_mode": True,
-        "write_word": load_policy().get("write_word","ERASE")
+            "write_word": pol.get("write_word", "ERASE"),
         },
         "state": {
             "mode": s["mode"],
@@ -279,11 +276,9 @@ def safety():
 @app.get("/api/os")
 def api_os():
     catalog = load_os_catalog()
-    # optional q filter for UI
     q = request.args.get("q", "").strip().lower()
     if q:
         catalog = [x for x in catalog if (q in x["name"].lower() or q in (x["description"] or "").lower())]
-    # cap to avoid phone choking
     return jsonify({"count": len(catalog), "items": catalog[:250]})
 
 @app.post("/api/plan_flash")
@@ -305,10 +300,16 @@ def api_plan_flash():
     if not os_item:
         return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
 
+    pol = load_policy()
     url = os_item["url"]
+
     plan = {
         "ok": True,
         "note": "DRY-RUN ONLY. No writes occur in this build.",
+        "confirmations": [
+            {"type": "WORD", "value": pol.get("write_word", "ERASE"), "note": "One-word ALL-CAPS write safety token"},
+            {"type": "TARGET", "value": target, "note": "Target must match exactly"}
+        ],
         "target": target,
         "os": {
             "id": os_item["id"],
@@ -322,10 +323,6 @@ def api_plan_flash():
             "extract_size": os_item.get("extract_size"),
             "init_format": os_item.get("init_format"),
         },
-        "confirmations": [
-            {"type":"WORD","value": load_policy().get("write_word","ERASE"), "note":"One-word ALL-CAPS write safety token"},
-            {"type":"TARGET","value": target, "note":"Target must match exactly"}
-        ],
         "steps": [
             {"step": 1, "action": "Re-check safety", "detail": "Confirm target is not the root disk and SD mode is active."},
             {"step": 2, "action": "Download image", "detail": f"curl -L '{url}' -o cache/os.img (or cache/os.img.xz/zip)"},

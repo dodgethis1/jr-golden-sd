@@ -93,7 +93,8 @@ async function loadOS(q=""){
     `<b>Safety policy:</b><br>
      Flash enabled: <span class="pill">${p.flash_enabled}</span><br>
      Can flash here (must be SD mode): <span class="pill">${p.can_flash_here}</span><br>
-     Root disk blocked: <span class="pill">${p.root_disk_blocked}</span><br><br>
+     Root disk blocked: <span class="pill">${p.root_disk_blocked}</span><br>
+     Required write word: <span class="pill">${p.write_word}</span><br><br>
      <small>We will not enable flashing until the safety engine + confirmations are complete.</small>`;
 
   const tSel = document.getElementById("target");
