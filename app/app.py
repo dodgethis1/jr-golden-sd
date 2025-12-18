@@ -6,6 +6,40 @@ from flask import Flask, jsonify, send_from_directory, Response, request
 
 APP_PORT = int(os.environ.get("JR_GOLDEN_SD_PORT", "8025"))
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+def version_info():
+    """
+    Versioning policy:
+      - SemVer tags: vMAJOR.MINOR.PATCH
+      - Build identity: git describe --tags --dirty --always
+    """
+    import os, re, subprocess
+
+    def _git(args):
+        try:
+            r = subprocess.run(["git", "-C", BASE_DIR, *args], capture_output=True, text=True)
+            if r.returncode != 0:
+                return None
+            out = (r.stdout or "").strip()
+            return out or None
+        except Exception:
+            return None
+
+    describe = _git(["describe", "--tags", "--dirty", "--always"])
+    commit = _git(["rev-parse", "--short=12", "HEAD"])
+    st = (_git(["status", "--porcelain"]) or "")
+    dirty = bool(st.strip())
+
+    semver = None
+    if describe:
+        m = re.match(r"^(v\d+\.\d+\.\d+)", describe)
+        if m:
+            semver = m.group(1)
+
+    version = os.environ.get("JR_GOLDEN_SD_VERSION") or describe or commit or "unknown"
+    source = "env" if os.environ.get("JR_GOLDEN_SD_VERSION") else "git"
+    return {"version": version, "describe": describe, "commit": commit, "dirty": dirty, "semver": semver, "source": source}
+
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 
 app = Flask(__name__, static_folder=os.path.join(BASE_DIR, "static"))
@@ -396,8 +430,18 @@ def os_cache_paths(os_id: str, url: str) -> dict:
 
 @app.get("/api/health")
 def health():
+    vi = version_info()
     m = detect_mode()
-    return jsonify({"ok": True, "version": get_version(), **m})
+    return jsonify({
+      "ok": True,
+      "version": vi.get("version"),
+      "semver": vi.get("semver"),
+      "git_describe": vi.get("describe"),
+      "git_commit": vi.get("commit"),
+      "git_dirty": vi.get("dirty"),
+      "version_source": vi.get("source"),
+      **m
+    })
 
 @app.get("/api/urls")
 def api_urls():

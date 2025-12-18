@@ -68,3 +68,11 @@ Read-only log tail for a job.
 - Errors:
   - 404 if log does not exist
   - 400 on invalid job_id
+
+## Versioning fields (GET /api/health)
+- `version`: primary display string (git-describe unless overridden)
+- `semver`: `vX.Y.Z` if a SemVer tag exists, else null
+- `git_describe`: `git describe --tags --dirty --always`
+- `git_commit`: short commit hash
+- `git_dirty`: boolean
+- `version_source`: `"git"` or `"env"`
