@@ -50,7 +50,9 @@
 
     <br>
     <button id="planBtn">Generate plan (dry-run)</button>
+    <button id="dlBtn">Download OS to cache</button>
     <div id="planOut" style="margin-top:12px;"></div>
+    <div id="dlOut" style="margin-top:12px;"></div>
 
     <hr style="margin:16px 0;">
 
@@ -172,7 +174,20 @@ let lastPlan = null;
       `<b>ARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
   });
 
-  document.getElementById("disarmBtn").addEventListener("click", async () => {
+  
+  document.getElementById("dlBtn").addEventListener("click", async () => {
+    const os_id = document.getElementById("os").value;
+    const r = await fetch("/api/download_os", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ os_id })
+    });
+    const data = await r.json();
+    document.getElementById("dlOut").innerHTML =
+      `<b>Download request:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+  });
+
+document.getElementById("disarmBtn").addEventListener("click", async () => {
     const r = await fetch("/api/disarm", { method: "POST" });
     const data = await r.json();
     document.getElementById("armOut").innerHTML =

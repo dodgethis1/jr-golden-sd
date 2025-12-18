@@ -20,6 +20,7 @@ def ensure_cache_dir():
 def load_policy() -> dict:
     # One-word, ALL-CAPS safety token for destructive writes
     default_word = os.environ.get("JR_WRITE_WORD", "ERASE").strip().upper() or "ERASE"
+    default_word = re.split(r"\s+", default_word)[0] if default_word else "ERASE"
     pol = {"write_word": default_word, "arm_ttl_seconds": 600}
     try:
         path = os.path.join(BASE_DIR, "data", "policy.json")
@@ -27,6 +28,7 @@ def load_policy() -> dict:
             with open(path, "r", encoding="utf-8") as f:
                 obj = json.load(f)
             w = str(obj.get("write_word", default_word)).strip().upper() or default_word
+            w = re.split(r"\s+", w)[0] if w else default_word
             pol["write_word"] = w
             if "arm_ttl_seconds" in obj:
                 pol["arm_ttl_seconds"] = int(obj["arm_ttl_seconds"])
@@ -285,6 +287,110 @@ def clear_arm_state():
     except Exception:
         pass
 
+
+# ---------------- jobs (downloads, later flash) ----------------
+
+def jobs_dir() -> str:
+    ensure_cache_dir()
+    d = os.path.join(CACHE_DIR, "jobs")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def job_file(job_id: str) -> str:
+    return os.path.join(jobs_dir(), f"{job_id}.json")
+
+def job_is_alive(pid: int) -> bool:
+    return pid > 0 and os.path.exists(f"/proc/{pid}")
+
+def job_load(job_id: str) -> dict | None:
+    path = job_file(job_id)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def job_save(job: dict):
+    job["updated_at"] = time.time()
+    with open(job_file(job["id"]), "w", encoding="utf-8") as f:
+        json.dump(job, f)
+
+def job_refresh(job: dict) -> dict:
+    # If running but process is gone, resolve via rc file
+    if job.get("status") == "running":
+        pid = int(job.get("pid", 0) or 0)
+        if not job_is_alive(pid):
+            rc_path = job.get("rc_path")
+            rc = None
+            if rc_path and os.path.exists(rc_path):
+                try:
+                    rc = int(Path(rc_path).read_text().strip() or "1")
+                except Exception:
+                    rc = 1
+            job["status"] = "success" if rc == 0 else "failed"
+            job["exit_code"] = rc if rc is not None else 1
+            job_save(job)
+    return job
+
+def start_job(job_type: str, script_body: str, meta: dict) -> dict:
+    jid = secrets.token_hex(8)
+    d = jobs_dir()
+    script_path = os.path.join(d, f"{jid}.sh")
+    log_path = os.path.join(d, f"{jid}.log")
+    rc_path = os.path.join(d, f"{jid}.rc")
+
+    script = "#!/bin/bash\n"
+    script += "set -euo pipefail\n"
+    script += f"trap 'echo $? > {shlex_quote(rc_path)}' EXIT\n"
+    script += script_body.strip() + "\n"
+
+    Path(script_path).write_text(script)
+    os.chmod(script_path, 0o700)
+
+    lf = open(log_path, "ab", buffering=0)
+    proc = subprocess.Popen(["bash", script_path], stdout=lf, stderr=subprocess.STDOUT, start_new_session=True)
+
+    job = {
+        "id": jid,
+        "type": job_type,
+        "status": "running",
+        "pid": proc.pid,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "script_path": script_path,
+        "log_path": log_path,
+        "rc_path": rc_path,
+        "meta": meta or {},
+    }
+    job_save(job)
+    return job
+
+def shlex_quote(s: str) -> str:
+    import shlex
+    return shlex.quote(s)
+
+def os_cache_dir() -> str:
+    ensure_cache_dir()
+    d = os.path.join(CACHE_DIR, "os")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def os_cache_key(os_id: str, url: str) -> str:
+    return hashlib.sha1((os_id + "|" + url).encode("utf-8")).hexdigest()[:16]
+
+def os_cache_paths(os_id: str, url: str) -> dict:
+    key = os_cache_key(os_id, url)
+    base = os.path.join(os_cache_dir(), key)
+    return {
+        "key": key,
+        "base": base,
+        "meta": base + ".meta.json",
+        "bin":  base + ".bin"
+    }
+
+
 # ---------------- routes ----------------
 
 @app.get("/api/health")
@@ -304,7 +410,7 @@ def safety():
     return jsonify({
         "version": get_version(),
         "policy": {
-            "flash_enabled": False,      # STILL READ-ONLY
+            "flash_enabled": bool(pol.get("flash_enabled", False)),      # STILL READ-ONLY
             "can_flash_here": s["can_flash_here"],
             "root_disk_blocked": True,
             "requires_sd_mode": True,
@@ -450,6 +556,119 @@ def arm():
 def disarm():
     clear_arm_state()
     return jsonify({"ok": True, "armed": False})
+
+
+@app.get("/api/job/<job_id>")
+def api_job(job_id: str):
+    job = job_load(job_id)
+    if not job:
+        return jsonify({"ok": False, "error": "Unknown job id"}), 404
+    job = job_refresh(job)
+    # Don't spam huge logs in JSON; provide log path and let caller fetch tail via ssh if needed
+    return jsonify({"ok": True, "job": job})
+
+@app.get("/api/os_cache")
+def api_os_cache():
+    os_id = request.args.get("os_id", "").strip()
+    if not os_id:
+        return jsonify({"ok": False, "error": "os_id required"}), 400
+    catalog = load_os_catalog()
+    os_item = find_os(os_id, catalog)
+    if not os_item:
+        return jsonify({"ok": False, "error": "Unknown os_id"}), 404
+    paths = os_cache_paths(os_id, os_item["url"])
+    meta = {}
+    if os.path.exists(paths["meta"]):
+        try:
+            with open(paths["meta"], "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+    exists = os.path.exists(paths["bin"])
+    size = os.path.getsize(paths["bin"]) if exists else 0
+    return jsonify({"ok": True, "cached": bool(exists), "size_bytes": size, "paths": paths, "meta": meta})
+
+@app.post("/api/download_os")
+def api_download_os():
+    # Downloads image to cache on demand. Still NO disk writes.
+    body = request.get_json(force=True, silent=True) or {}
+    os_id = str(body.get("os_id", "")).strip()
+
+    if not os_id:
+        return jsonify({"ok": False, "error": "os_id required"}), 400
+
+    sstate = safety_state()
+    if not sstate["can_flash_here"]:
+        return jsonify({"ok": False, "error": "Not in SD mode. Downloads are only allowed in Golden SD mode."}), 400
+
+    catalog = load_os_catalog()
+    os_item = find_os(os_id, catalog)
+    if not os_item:
+        return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
+
+    url = os_item["url"]
+    expect = os_item.get("image_download_sha256") or ""
+    paths = os_cache_paths(os_id, url)
+
+    # If already cached, return cache info
+    if os.path.exists(paths["bin"]) and os.path.exists(paths["meta"]):
+        return jsonify({"ok": True, "cached": True, "paths": paths})
+
+    # Write meta stub now (job will fill in actual sha/size)
+    meta = {
+        "os_id": os_id,
+        "name": os_item.get("name"),
+        "provider": os_item.get("provider_label"),
+        "url": url,
+        "expected_sha256": expect,
+        "created_at": time.time(),
+        "path": paths["bin"],
+    }
+    with open(paths["meta"], "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+
+    script = f"""
+echo "Downloading: {shlex_quote(url)}"
+OUT={shlex_quote(paths["bin"])}
+TMP="$OUT.tmp"
+META={shlex_quote(paths["meta"])}
+EXPECT={shlex_quote(expect)}
+
+mkdir -p {shlex_quote(os_cache_dir())}
+
+curl -L --fail --retry 3 --retry-delay 2 -o "$TMP" {shlex_quote(url)}
+SHA=$(sha256sum "$TMP" | awk '{{print $1}}')
+SIZE=$(stat -c %s "$TMP" || wc -c < "$TMP")
+
+if [ -n "$EXPECT" ] && [ "$SHA" != "$EXPECT" ]; then
+  echo "SHA256 MISMATCH"
+  echo "expected=$EXPECT"
+  echo "actual=$SHA"
+  exit 2
+fi
+
+mv "$TMP" "$OUT"
+
+python3 - <<'PY2'
+import json, os, time
+meta_path = os.environ.get("JR_META")
+sha = os.environ.get("JR_SHA")
+size = int(os.environ.get("JR_SIZE") or "0")
+with open(meta_path, "r", encoding="utf-8") as f:
+    m = json.load(f)
+m["downloaded_at"] = time.time()
+m["sha256_actual"] = sha
+m["size_bytes"] = size
+with open(meta_path, "w", encoding="utf-8") as f:
+    json.dump(m, f)
+print("META_UPDATED")
+PY2
+"""
+    # inject env vars for python meta updater using bash exports
+    script = script.replace("python3 - <<'PY2'", 'export JR_META="$META"\nexport JR_SHA="$SHA"\nexport JR_SIZE="$SIZE"\npython3 - <<\'PY2\'')
+
+    job = start_job("download_os", script, {"os_id": os_id, "url": url, "out": paths["bin"]})
+    return jsonify({"ok": True, "job_id": job["id"], "job": job, "paths": paths})
 
 @app.get("/api/qr")
 def api_qr():
