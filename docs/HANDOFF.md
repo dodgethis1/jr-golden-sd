@@ -62,6 +62,13 @@ Not allowed (default):
   - `*.json` job state
   - `*.log` stdout/stderr
   - `*.rc` exit code
+<!-- DOC_RC_WINS_NOTE -->
+### Job status resolution
+- The presence of `cache/jobs/<job_id>.rc` is **authoritative** for completion.
+  - `rc == 0` → `status = success`
+  - `rc != 0` → `status = failed`
+- If the `.rc` file is **absent**, the job may be considered `running` only if the recorded `pid` still exists (e.g., `/proc/<pid>` exists).
+
   - `*.sh` generated script
 - `start_job()` writes a bash script with `trap 'echo $? > rcfile' EXIT` and runs detached; logs to `*.log`.
 - `job_refresh()` marks success/failed by reading rcfile if pid is gone.
