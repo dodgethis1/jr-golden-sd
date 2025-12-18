@@ -17,3 +17,12 @@ Fix patterns:
 ## Service restarts
 jr-golden-sd.service restarts show up as gunicorn workers receiving SIGTERM.
 If this coincides with client polling loops, you can get empty responses.
+
+## Preflight check (recommended before pushes/releases)
+Run:
+- `./scripts/preflight.sh`
+
+It checks:
+- Python syntax (`py_compile`)
+- UI obvious breakage patterns
+- Service restart + `/api/health` comes back
