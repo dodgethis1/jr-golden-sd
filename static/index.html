@@ -82,7 +82,7 @@ async function j(url){ const r=await fetch(url); return await r.json(); }
       <tbody>${trows || "<tr><td colspan=5>(none)</td></tr>"}</tbody>
      </table>
      <br>
-     <small>Still read-only. Next step is adding a "plan flash" dry-run before real flashing exists.</small>`;
+     <small>Still read-only. Next step is adding a Flash Plan (dry-run) before real flashing exists.</small>`;
 
   const d = await j("/api/disks");
   const rows = (d.lsblk.blockdevices || [])

@@ -56,8 +56,7 @@ def list_urls(port: int) -> list[str]:
             parts = line.split()
             if len(parts) < 3:
                 continue
-            state = parts[1]
-            if state != "UP":
+            if parts[1] != "UP":
                 continue
             for p in parts[2:]:
                 if re.match(r"^\d+\.\d+\.\d+\.\d+/\d+$", p):
@@ -79,7 +78,7 @@ def list_urls(port: int) -> list[str]:
             out.append(u)
     return out
 
-def list_disks() -> dict:
+def safety_state() -> dict:
     cols = "NAME,KNAME,PATH,MODEL,SERIAL,SIZE,TYPE,TRAN,MOUNTPOINT,FSTYPE,ROTA,RM"
     raw = sh(["lsblk", "-J", "-o", cols])
     obj = json.loads(raw)
@@ -104,6 +103,7 @@ def list_disks() -> dict:
         })
 
     eligible = [x for x in disks if not x["is_root_disk"]]
+
     return {
         "mode": m["mode"],
         "root_source": m["root_source"],
@@ -138,7 +138,7 @@ def disks():
 
 @app.get("/api/safety")
 def safety():
-    s = list_disks()
+    s = safety_state()
     return jsonify({
         "version": get_version(),
         "policy": {
