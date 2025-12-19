@@ -5,25 +5,138 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>JR Golden SD</title>
   <style>
-    body { font-family: system-ui, sans-serif; padding: 16px; }
-    .box { border: 1px solid #ccc; border-radius: 12px; padding: 12px; margin: 12px 0; }
-    .warn { border-color: #b00; }
-    .mode { font-size: 22px; font-weight: 800; }
-    .pill { display:inline-block; padding: 2px 10px; border-radius: 999px; background:#f3f3f3; }
-    code, pre { background: #f3f3f3; padding: 8px; border-radius: 10px; overflow:auto; }
-    input, select, button { font-size: 16px; padding: 8px; }
-    button { cursor: pointer; }
-    .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
-    @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .row > * { flex: 1 1 220px; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .log { max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
-    .small { font-size: 12px; opacity: 0.85; }
-  </style>
+  :root{
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #111827;
+    --muted: rgba(17,24,39,.72);
+    --border: rgba(17,24,39,.18);
+    --pill: rgba(17,24,39,.06);
+    --mono-bg: rgba(17,24,39,.06);
+    --warn: #b00020;
+    --ok: #0a7b34;
+    --link: #0b63ce;
+    --shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+
+  /* Default to system dark mode */
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg: #0b1220;
+      --panel: #0f1b33;
+      --text: #e5e7eb;
+      --muted: rgba(229,231,235,.72);
+      --border: rgba(229,231,235,.18);
+      --pill: rgba(229,231,235,.08);
+      --mono-bg: rgba(229,231,235,.08);
+      --warn: #ff4d6d;
+      --ok: #2bd576;
+      --link: #7ab7ff;
+      --shadow: 0 1px 2px rgba(0,0,0,.35);
+    }
+  }
+
+  /* Manual overrides (button cycles these) */
+  body.theme-light{
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --text: #111827;
+    --muted: rgba(17,24,39,.72);
+    --border: rgba(17,24,39,.18);
+    --pill: rgba(17,24,39,.06);
+    --mono-bg: rgba(17,24,39,.06);
+    --warn: #b00020;
+    --ok: #0a7b34;
+    --link: #0b63ce;
+    --shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+  body.theme-dark{
+    --bg: #0b1220;
+    --panel: #0f1b33;
+    --text: #e5e7eb;
+    --muted: rgba(229,231,235,.72);
+    --border: rgba(229,231,235,.18);
+    --pill: rgba(229,231,235,.08);
+    --mono-bg: rgba(229,231,235,.08);
+    --warn: #ff4d6d;
+    --ok: #2bd576;
+    --link: #7ab7ff;
+    --shadow: 0 1px 2px rgba(0,0,0,.35);
+  }
+
+  body{
+    font-family: system-ui, sans-serif;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  a{ color: var(--link); }
+  a:visited{ color: var(--link); }
+
+  .topbar{
+    display:flex;
+    gap:12px;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom: 8px;
+  }
+  .topbar h2{ margin:0; }
+
+  .box{
+    border: 1px solid var(--border);
+    background: var(--panel);
+    box-shadow: var(--shadow);
+    border-radius: 12px;
+    padding: 12px;
+    margin: 12px 0;
+  }
+  .warn{
+    border-color: var(--warn);
+    box-shadow: 0 0 0 1px rgba(255,0,0,.08), var(--shadow);
+  }
+
+  .mode{ font-size: 22px; font-weight: 800; }
+
+  .pill{
+    display:inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--pill);
+    border: 1px solid var(--border);
+  }
+
+  code, pre{
+    background: var(--mono-bg);
+    padding: 8px;
+    border-radius: 10px;
+    overflow:auto;
+  }
+
+  input, select, button{
+    font-size: 16px;
+    padding: 8px;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  button{ cursor: pointer; }
+  button:hover{ filter: brightness(1.02); }
+
+  .grid{ display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 900px){ .grid{ grid-template-columns: 1fr 1fr; } }
+
+  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .row > *{ flex: 1 1 220px; }
+
+  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .log{ max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
+  .small{ font-size: 12px; opacity: 0.85; color: var(--muted); }
+</style>
 </head>
 <body>
-  <h2>JR Golden SD</h2>
+  <div class="topbar" data-jr="JR_THEME_TOGGLE_V1"><h2>JR Golden SD</h2><button id="themeBtn" class="pill" title="Cycle Auto/Dark/Light">Theme: Auto</button></div>
 
   <div class="box" id="headline">Loading…</div>
 
