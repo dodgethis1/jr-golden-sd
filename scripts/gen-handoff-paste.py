@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -33,6 +34,8 @@ def main() -> int:
     if rc != 0: git_commit = "UNKNOWN"
     rc, git_describe, _ = run(["git","describe","--always","--dirty"], repo)
     if rc != 0: git_describe = "UNKNOWN"
+    rc, git_branch, _ = run(["git","rev-parse","--abbrev-ref","HEAD"], repo)
+    if rc != 0: git_branch = "UNKNOWN"
     rc, porcelain, _ = run(["git","status","--porcelain=v1"], repo)
     git_dirty = bool(porcelain.strip())
 
@@ -40,7 +43,13 @@ def main() -> int:
     rc, active, _ = run(["systemctl","is-active",SERVICE], repo)
     rc, enabled, _ = run(["systemctl","is-enabled",SERVICE], repo)
 
-    health = try_json(HEALTH_URL, timeout=2.0)
+    health = {}
+    for _ in range(40):
+        health = try_json(HEALTH_URL, timeout=1.5)
+        if health.get("ok"):
+            break
+        time.sleep(0.25)
+
     host = socket.gethostname()
     now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 
@@ -64,6 +73,7 @@ def main() -> int:
     out.append("Runtime facts:\n")
     out.append(f"- git_commit: {git_commit}\n")
     out.append(f"- git_describe: {git_describe}\n")
+    out.append(f"- git_branch: {git_branch}\n")
     out.append(f"- git_dirty: {str(git_dirty).lower()}\n")
     out.append(f"- service_active: {active or 'unknown'}\n")
     out.append(f"- service_enabled: {enabled or 'unknown'}\n")
