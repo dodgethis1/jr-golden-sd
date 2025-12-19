@@ -907,6 +907,7 @@ def api_flash():
   target = str(body.get("target", "")).strip()
   os_id = str(body.get("os_id", "")).strip()
   token = str(body.get("token", "")).strip()
+  word = str(body.get("word", "")).strip().upper()
   confirm_target = str(body.get("confirm_target", "")).strip()
   serial_suffix = str(body.get("serial_suffix", "")).strip()
   plan_id_req = str(body.get("plan_id") or body.get("plan_token") or "").strip()
@@ -927,9 +928,12 @@ def api_flash():
     return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
   if not target or target not in eligible:
     return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
-  if confirm_target and confirm_target != target:
+  if not confirm_target:
+    return jsonify({"ok": False, "error": "confirm_target required and must match target exactly."}), 400
+  if confirm_target != target:
     return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
-
+  if word != pol.get("write_word", "ERASE"):
+    return jsonify({"ok": False, "error": "Write word must be exactly: " + str(pol.get("write_word","ERASE"))}), 400
   armed = load_arm_state()
   if not armed:
     return jsonify({"ok": False, "error": "Not armed. Call /api/arm first."}), 400
@@ -954,7 +958,9 @@ def api_flash():
     return jsonify({"ok": False, "error": "Invalid or missing token. Use the token returned by /api/arm."}), 400
 
   plan_id = str(armed.get("plan_id") or "").strip()
-  if plan_id_req and plan_id_req != plan_id:
+  if not plan_id_req:
+    return jsonify({"ok": False, "error": "plan_id required. Call /api/plan_flash then /api/arm, then pass plan_id here."}), 400
+  if plan_id_req != plan_id:
     return jsonify({"ok": False, "error": "plan_id does not match what you armed with."}), 400
   if not plan_id:
     return jsonify({"ok": False, "error": "Missing plan. Call /api/plan_flash then /api/arm with plan_id."}), 400
