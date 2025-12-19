@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import socket
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -24,6 +23,19 @@ def try_json(url: str, timeout: float = 2.0) -> dict:
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+def systemd_states(repo: Path) -> tuple[str, str]:
+    # best effort; don't die if systemctl output is weird
+    rc, out, _ = run(["systemctl","show",SERVICE,"-p","ActiveState","-p","SubState"], repo)
+    active_state = "unknown"
+    sub_state = "unknown"
+    if rc == 0 and out:
+        for line in out.splitlines():
+            if line.startswith("ActiveState="):
+                active_state = line.split("=", 1)[1].strip() or "unknown"
+            elif line.startswith("SubState="):
+                sub_state = line.split("=", 1)[1].strip() or "unknown"
+    return active_state, sub_state
+
 def main() -> int:
     repo = Path(__file__).resolve().parents[1]
     docs = repo / "docs"
@@ -40,15 +52,20 @@ def main() -> int:
     git_dirty = bool(porcelain.strip())
 
     # Service facts (best effort)
-    rc, active, _ = run(["systemctl","is-active",SERVICE], repo)
+    active_state, sub_state = systemd_states(repo)
     rc, enabled, _ = run(["systemctl","is-enabled",SERVICE], repo)
 
-    health = {}
-    for _ in range(40):
-        health = try_json(HEALTH_URL, timeout=1.5)
-        if health.get("ok"):
-            break
-        time.sleep(0.25)
+    # Health facts:
+    # If this runs during ExecStartPre/early startup, health can be temporarily unreachable.
+    # Only attempt /api/health if ActiveState=active.
+    health = {"ok": None}
+    health_note = None
+    if active_state == "active":
+        health = try_json(HEALTH_URL, timeout=2.0)
+        if health.get("ok") is False and "error" in health:
+            health_note = health.get("error")
+    else:
+        health_note = f"skipped (service not active yet): ActiveState={active_state} SubState={sub_state}"
 
     host = socket.gethostname()
     now = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -60,6 +77,11 @@ def main() -> int:
     canonical_text = ""
     if canonical.exists():
         canonical_text = canonical.read_text(encoding="utf-8", errors="replace").rstrip()
+
+    def tri(v) -> str:
+        if v is True: return "true"
+        if v is False: return "false"
+        return "unknown"
 
     out = []
     out.append("HANDOFF (recipient: ChatGPT)\n\n")
@@ -75,13 +97,16 @@ def main() -> int:
     out.append(f"- git_describe: {git_describe}\n")
     out.append(f"- git_branch: {git_branch}\n")
     out.append(f"- git_dirty: {str(git_dirty).lower()}\n")
-    out.append(f"- service_active: {active or 'unknown'}\n")
+    out.append(f"- service_active_state: {active_state}\n")
+    out.append(f"- service_sub_state: {sub_state}\n")
     out.append(f"- service_enabled: {enabled or 'unknown'}\n")
-    out.append(f"- health_ok: {str(bool(health.get('ok'))).lower()}\n")
-    if "mode" in health: out.append(f"- mode: {health.get('mode')}\n")
-    if "version" in health: out.append(f"- version: {health.get('version')}\n")
-    if health.get("ok") is False and "error" in health:
-        out.append(f"- health_error: {health.get('error')}\n")
+    out.append(f"- health_ok: {tri(health.get('ok') if isinstance(health.get('ok'), bool) else None)}\n")
+    if isinstance(health.get("ok"), bool) and "mode" in health:
+        out.append(f"- mode: {health.get('mode')}\n")
+    if isinstance(health.get("ok"), bool) and "version" in health:
+        out.append(f"- version: {health.get('version')}\n")
+    if health_note:
+        out.append(f"- health_note: {health_note}\n")
     out.append("\n")
 
     out.append("Paste-safe rules:\n")
