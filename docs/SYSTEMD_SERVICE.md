@@ -23,13 +23,12 @@ That is expected. The important signals are:
 Once `ExecStartPost` exits, the service becomes `ActiveState=active` / `SubState=running`.
 
 ## Drop-in ordering gotcha
-Drop-ins apply in lexicographic order. If a later drop-in clears `ExecStartPost`, it will override earlier ones.
+Drop-ins apply in lexicographic order. If a later drop-in clears `ExecStartPost`, it overrides earlier ones.
 
-We intentionally keep startup resilient (avoid restart loops) by allowing the base unit to start even if helper scripts are missing.
-If you add an `ExecStartPost` hook, prefer an ignore-errors form in the drop-in:
+If you want the post-start handoff, ensure the drop-in that sets it sorts *after* any drop-in that clears it.
+Also consider making the post hook non-fatal to startup:
 
+Example (recommended):
 - `ExecStartPost=-/opt/jr-pi-toolkit/golden-sd/scripts/handoff-post.sh`
 
-## What is and isn’t in git
-Repo scripts/docs are in git.
-System configuration under `/etc/systemd/...` is not in git by default.
+That way the web UI still starts even if the handoff script is missing/broken.
