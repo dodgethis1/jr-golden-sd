@@ -599,6 +599,19 @@ function startJobFollow(jobId){
       expires_at: data.expires_at || null,
       data
     };
+      // JR_AUTO_FILL_CONFIRMATIONS_V1: auto-fill required confirmations from plan response
+      try {
+        const w = (data.confirmations_required || []).find(x => x && x.type === "WORD");
+        const wordEl = document.getElementById("word");
+        if (wordEl && w && w.value) wordEl.value = String(w.value).trim().toUpperCase();
+      } catch {}
+
+      try {
+        const c = document.getElementById("confirmTarget");
+        if (c) c.value = target;
+      } catch {}
+
+
 
     const exp = data.expires_at ? tsToLocal(data.expires_at) : "";
     const pid = data.plan_id ? `<code>${esc(data.plan_id)}</code>` : `<span class="pill">missing plan_id</span>`;
@@ -618,14 +631,34 @@ function startJobFollow(jobId){
 
     const target = (tSel && tSel.value) ? tSel.value : "";
     const os_id = (document.getElementById("os").value || "").trim();
-    const word = document.getElementById("word").value || "";
-    const confirm_target = document.getElementById("confirmTarget").value || "";
-    const serial_suffix = document.getElementById("serialSuffix").value || "";
+      const word = (document.getElementById("word").value || "").trim().toUpperCase();
+      const confirm_target = (document.getElementById("confirmTarget").value || "").trim();
+      const serial_suffix = (document.getElementById("serialSuffix").value || "").trim();
+      // JR_ARM_REQUIRES_PLAN_ID_V1
+      const plan_id = (lastPlan && lastPlan.plan_id) ? String(lastPlan.plan_id) : "";
+      const armOut = document.getElementById("armOut");
+
+      if (!plan_id){
+        if (armOut) armOut.innerHTML =
+          `<b>ARM error:</b> <span class="pill">plan_id missing</span> Click <b>Plan</b> first (still no writes).`;
+        return;
+      }
+      if (!confirm_target){
+        if (armOut) armOut.innerHTML =
+          `<b>ARM error:</b> confirm_target is required and must match target exactly.`;
+        return;
+      }
+      if (confirm_target !== target){
+        if (armOut) armOut.innerHTML =
+          `<b>ARM error:</b> confirm_target (${esc(confirm_target)}) must match target (${esc(target)}) exactly.`;
+        return;
+      }
+
 
     const r = await fetch("/api/arm", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ target, os_id, word, confirm_target, serial_suffix })
+      body: JSON.stringify({ target, os_id, plan_id, word, confirm_target, serial_suffix })
     });
     const txt = await r.text();
     const data = txt ? JSON.parse(txt) : {};
