@@ -17,10 +17,10 @@
     @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
     .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .row > * { flex: 1 1 220px; }
-        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-      .log { max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
-      .small { font-size: 12px; opacity: 0.85; }
-    </style>
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .log { max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
+    .small { font-size: 12px; opacity: 0.85; }
+  </style>
 </head>
 <body>
   <h2>JR Golden SD</h2>
@@ -35,7 +35,6 @@
   <div class="box warn" id="policy">Loading policy…</div>
 
   <div class="box" id="targetsBox">Loading disks…</div>
-
 
   <div class="box" id="planner">
     <b>Flash Plan (dry-run):</b><br><br>
@@ -86,28 +85,26 @@
     <div id="armOut" style="margin-top:12px;"></div>
   </div>
 
-    <div class="box" id="jobbox">
-      <b>Job monitor:</b> <span class="pill" id="jobState">idle</span><br>
-      <small class="small">Watches <code>/api/job/&lt;id&gt;</code> and tails logs via <code>/api/job/&lt;id&gt;/tail</code> (read-only).</small><br><br>
+  <div class="box" id="jobbox">
+    <b>Job monitor:</b> <span class="pill" id="jobState">idle</span><br>
+    <small class="small">Watches <code>/api/job/&lt;id&gt;</code> and tails logs via <code>/api/job/&lt;id&gt;/tail</code> (read-only).</small><br><br>
 
-      <div class="row">
-        <label>Job ID:<br>
-          <input id="jobId" placeholder="paste job_id here" style="width:100%">
-        </label>
+    <div class="row">
+      <label>Job ID:<br>
+        <input id="jobId" placeholder="paste job_id here" style="width:100%">
+      </label>
 
-        <div>
-          <br>
-          <button id="followJobBtn">Follow job</button>
-          <button id="stopJobBtn">Stop</button>
-        </div>
+      <div>
+        <br>
+        <button id="followJobBtn">Follow job</button>
+        <button id="stopJobBtn">Stop</button>
       </div>
-
-      <div id="jobStatus" style="margin-top:12px;"></div>
-      <div style="margin-top:12px;"><b>Live log (last 200 lines):</b></div>
-      <pre id="jobLog" class="log mono"></pre>
     </div>
 
-
+    <div id="jobStatus" style="margin-top:12px;"></div>
+    <div style="margin-top:12px;"><b>Live log (last 200 lines):</b></div>
+    <pre id="jobLog" class="log mono"></pre>
+  </div>
 
 <script>
 async function j(url, opts={}){
@@ -136,11 +133,13 @@ async function j(url, opts={}){
   }
   throw lastErr || new Error("request failed");
 }
+
 function opt(el, value, text){
   const o = document.createElement("option");
   o.value = value; o.textContent = text;
   el.appendChild(o);
 }
+
 async function loadOS(q=""){
   const osSel = document.getElementById("os");
   osSel.innerHTML = "";
@@ -149,6 +148,7 @@ async function loadOS(q=""){
     opt(osSel, it.id, `${it.name}  [${it.provider_label}]`);
   });
 }
+
 function tsToLocal(ts){
   if (!ts) return "";
   try { return new Date(ts * 1000).toLocaleString(); } catch { return ""; }
@@ -232,6 +232,7 @@ function renderStatus(safety, disks, armStatus){
 }
 
 let _statusTimer = null;
+
 async function refreshStatusOnce(){
   try {
     await j("/api/health", {retries: 12, delay_ms: 250});
@@ -239,6 +240,7 @@ async function refreshStatusOnce(){
     const disks  = await j("/api/disks",  {retries: 12, delay_ms: 250});
     const arm    = await j("/api/arm_status", {retries: 12, delay_ms: 250});
     renderStatus(safety, disks, arm);
+    syncPlannerFromSafety(safety);
   } catch (e) {
     const headline = document.getElementById("headline");
     const targetsBox = document.getElementById("targetsBox");
@@ -246,6 +248,7 @@ async function refreshStatusOnce(){
     if (targetsBox) targetsBox.textContent = "Waiting for backend…";
   }
 }
+
 function startStatusPoll(){
   if (_statusTimer) return;
   refreshStatusOnce();
@@ -254,146 +257,185 @@ function startStatusPoll(){
 window.addEventListener("load", startStatusPoll);
 // end JR_STATUS_PANEL_V1
 
+// JR_PLANNER_UX_V1: planner quality-of-life + guardrails (still NO new capabilities)
+let _plannerTargetsSig = null;
+
+function targetsSig(list){
+  try { return (list || []).map(x => x.path).join("|"); } catch { return ""; }
+}
+
+function syncPlannerFromSafety(safety){
+  const tSel = document.getElementById("target");
+  const confirmEl = document.getElementById("confirmTarget");
+  const wordEl = document.getElementById("word");
+
+  const eligible = (safety && safety.eligible_targets) ? safety.eligible_targets : [];
+  const pol = (safety && safety.policy) ? safety.policy : {};
+
+  if (tSel){
+    const sig = targetsSig(eligible);
+    const prev = tSel.value || "";
+    if (sig !== _plannerTargetsSig){
+      tSel.innerHTML = "";
+      eligible.forEach(d => {
+        const label = `${d.path} (${d.size||""} ${d.model||""} ${d.serial||""})`;
+        opt(tSel, d.path, label);
+      });
+      if (prev && eligible.some(d => d.path === prev)) tSel.value = prev;
+      _plannerTargetsSig = sig;
+    }
+  }
+
+  const curTarget = (tSel && tSel.value) ? tSel.value : "";
+  if (confirmEl){
+    confirmEl.placeholder = curTarget || confirmEl.placeholder || "";
+    if (!confirmEl.value) confirmEl.value = curTarget || "";
+  }
+
+  if (wordEl){
+    const ww = (pol && pol.write_word) ? String(pol.write_word) : "";
+    wordEl.placeholder = ww || wordEl.placeholder || "";
+    if (!wordEl.value && ww) wordEl.value = ww;
+  }
+}
+
+async function ensureTargetsLoaded(){
+  const tSel = document.getElementById("target");
+  if (tSel && tSel.options && tSel.options.length > 0) return;
+  const safety = await j("/api/safety", {retries: 12, delay_ms: 250});
+  syncPlannerFromSafety(safety);
+}
+// end JR_PLANNER_UX_V1
 
 let lastPlan = null;
-  // --- Job monitor (status + live log tail) ---
-  let pollTimer = null;
 
-  function setJobState(txt){
-    const el = document.getElementById("jobState");
-    if (el) el.textContent = txt;
-  }
+// --- Job monitor (status + live log tail) ---
+let pollTimer = null;
 
-  function isNearBottom(el, slack=24){
-    try { return (el.scrollTop + el.clientHeight + slack) >= el.scrollHeight; } catch { return true; }
-  }
+function setJobState(txt){
+  const el = document.getElementById("jobState");
+  if (el) el.textContent = txt;
+}
 
-  function stopJobPoll(){
-    if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-    setJobState("idle");
-  }
+function isNearBottom(el, slack=24){
+  try { return (el.scrollTop + el.clientHeight + slack) >= el.scrollHeight; } catch { return true; }
+}
 
-  function guessState(job){
-    if (!job || typeof job !== "object") return "unknown";
-    const s = job.state || job.status || job.phase || job.result;
-    if (typeof s === "string") return s;
-    if (job.ok === false) return "error";
-    if (job.exit_code !== undefined && job.exit_code !== null) return (job.exit_code === 0 ? "success" : "failed");
-    if (job.done === true) return "done";
-    if (job.pid) return "running";
-    return "unknown";
-  }
+function stopJobPoll(){
+  if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  setJobState("idle");
+}
 
-  function formatJobSummary(job){
-    if (!job || typeof job !== "object") return "";
-    const parts = [];
-    if (job.id) parts.push("id=" + job.id);
-    if (job.type) parts.push("type=" + job.type);
-    if (job.pid) parts.push("pid=" + job.pid);
-    if (job.exit_code !== undefined && job.exit_code !== null) parts.push("exit_code=" + job.exit_code);
-    if (job.created_at) parts.push("created=" + tsToLocal(job.created_at));
-    if (job.updated_at) parts.push("updated=" + tsToLocal(job.updated_at));
-    if (job.started_at) parts.push("started=" + tsToLocal(job.started_at));
-    if (job.ended_at) parts.push("ended=" + tsToLocal(job.ended_at));
-    return parts.join(" • ");
-  }
+function guessState(job){
+  if (!job || typeof job !== "object") return "unknown";
+  const s = job.state || job.status || job.phase || job.result;
+  if (typeof s === "string") return s;
+  if (job.ok === false) return "error";
+  if (job.exit_code !== undefined && job.exit_code !== null) return (job.exit_code === 0 ? "success" : "failed");
+  if (job.done === true) return "done";
+  if (job.pid) return "running";
+  return "unknown";
+}
 
-  async function pollJobOnce(jobId){
-    const statusEl = document.getElementById("jobStatus");
-    const logEl = document.getElementById("jobLog");
-    if (!statusEl || !logEl) return;
+function formatJobSummary(job){
+  if (!job || typeof job !== "object") return "";
+  const parts = [];
+  if (job.id) parts.push("id=" + job.id);
+  if (job.type) parts.push("type=" + job.type);
+  if (job.pid) parts.push("pid=" + job.pid);
+  if (job.exit_code !== undefined && job.exit_code !== null) parts.push("exit_code=" + job.exit_code);
+  if (job.created_at) parts.push("created=" + tsToLocal(job.created_at));
+  if (job.updated_at) parts.push("updated=" + tsToLocal(job.updated_at));
+  if (job.started_at) parts.push("started=" + tsToLocal(job.started_at));
+  if (job.ended_at) parts.push("ended=" + tsToLocal(job.ended_at));
+  return parts.join(" • ");
+}
 
-    // status
-    let job = null;
-    try {
-      const r = await fetch("/api/job/" + encodeURIComponent(jobId));
-      if (!r.ok) {
-        const t = await r.text();
-        setJobState("HTTP " + r.status);
-        statusEl.innerHTML = `<b>Status:</b> <span class="pill">HTTP ${r.status}</span><pre>${t}</pre>`;
-        return;
-      }
-      job = await r.json();
-    } catch (e) {
-      setJobState("error");
-      statusEl.innerHTML = `<b>Status:</b> <span class="pill">error</span><pre>${String(e)}</pre>`;
+async function pollJobOnce(jobId){
+  const statusEl = document.getElementById("jobStatus");
+  const logEl = document.getElementById("jobLog");
+  if (!statusEl || !logEl) return;
+
+  // status
+  let job = null;
+  try {
+    const r = await fetch("/api/job/" + encodeURIComponent(jobId));
+    if (!r.ok) {
+      const t = await r.text();
+      setJobState("HTTP " + r.status);
+      statusEl.innerHTML = `<b>Status:</b> <span class="pill">HTTP ${r.status}</span><pre>${esc(t)}</pre>`;
       return;
     }
-
-    const state = guessState(job);
-    setJobState(state);
-
-    statusEl.innerHTML =
-      `<b>Status:</b> <span class="pill">${state}</span><br>` +
-      `<small class="small">${formatJobSummary(job)}</small>` +
-      `<pre>${JSON.stringify(job, null, 2)}</pre>`;
-
-    // log tail
-    try {
-      const r2 = await fetch("/api/job/" + encodeURIComponent(jobId) + "/tail?lines=200");
-      if (r2.ok) {
-        const tail = await r2.json();
-        const wasNear = isNearBottom(logEl);
-        logEl.textContent = (tail.lines || []).join("\n");
-        if (wasNear) logEl.scrollTop = logEl.scrollHeight;
-      }
-    } catch {
-      // ignore log errors
-    }
-
-    // stop polling when done-ish
-    if (state === "success" || state === "failed" || state === "done") {
-      if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
-    }
+    job = await r.json();
+  } catch (e) {
+    setJobState("error");
+    statusEl.innerHTML = `<b>Status:</b> <span class="pill">error</span><pre>${esc(String(e))}</pre>`;
+    return;
   }
 
-  function startJobFollow(jobId){
-    jobId = (jobId || "").trim();
-    if (!jobId) return;
-    stopJobPoll();
-    const jobIdEl = document.getElementById("jobId");
-    if (jobIdEl) jobIdEl.value = jobId;
-    setJobState("starting");
-    pollJobOnce(jobId);
-    pollTimer = setInterval(() => pollJobOnce(jobId), 1500);
+  const state = guessState(job);
+  setJobState(state);
+
+  statusEl.innerHTML =
+    `<b>Status:</b> <span class="pill">${esc(state)}</span><br>` +
+    `<small class="small">${esc(formatJobSummary(job))}</small>` +
+    `<pre>${esc(JSON.stringify(job, null, 2))}</pre>`;
+
+  // log tail
+  try {
+    const r2 = await fetch("/api/job/" + encodeURIComponent(jobId) + "/tail?lines=200");
+    if (r2.ok) {
+      const tail = await r2.json();
+      const wasNear = isNearBottom(logEl);
+      logEl.textContent = (tail.lines || []).join("\n");
+      if (wasNear) logEl.scrollTop = logEl.scrollHeight;
+    }
+  } catch {
+    // ignore log errors
   }
 
+  // stop polling when done-ish
+  if (state === "success" || state === "failed" || state === "done") {
+    if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  }
+}
 
+function startJobFollow(jobId){
+  jobId = (jobId || "").trim();
+  if (!jobId) return;
+  stopJobPoll();
+  const jobIdEl = document.getElementById("jobId");
+  if (jobIdEl) jobIdEl.value = jobId;
+  setJobState("starting");
+  pollJobOnce(jobId);
+  pollTimer = setInterval(() => pollJobOnce(jobId), 1500);
+}
+
+// Main init
 (async () => {
-  const h = await j("/api/health");
-  document.getElementById("headline").innerHTML =
-    `<div class="mode">MODE: <span class="pill">${h.mode}</span></div>
-     <div><b>Version:</b> <code>${h.version}</code></div>
-     <div><b>Root source:</b> <code>${h.root_source || "unknown"}</code></div>
-     <div><b>Root parent:</b> <code>/dev/${h.root_parent || "unknown"}</code></div>`;
-
-  const u = await j("/api/urls");
+  const u = await j("/api/urls", {retries: 12, delay_ms: 250});
   document.getElementById("urls").innerHTML =
     `<b>Open this from your phone/PC:</b>
      <ul>${(u.urls||[]).map(x => `<li><a href="${x}">${x}</a></li>`).join("")}</ul>`;
   const first = (u.urls && u.urls[0]) ? u.urls[0] : location.origin + "/";
   document.getElementById("qr").innerHTML =
-    `<b>QR (scan me):</b><br><img src="/api/qr?u=${encodeURIComponent(first)}" alt="QR"><br><small><code>${first}</code></small>`;
+    `<b>QR (scan me):</b><br><img src="/api/qr?u=${encodeURIComponent(first)}" alt="QR"><br><small><code>${esc(first)}</code></small>`;
 
-  const s = await j("/api/safety");
-  const p = s.policy;
-  const armed = s.armed || {active:false};
-  document.getElementById("policy").innerHTML =
-    `<b>Safety policy:</b><br>
-     Flash enabled: <span class="pill">${p.flash_enabled}</span><br>
-     Can flash here (SD mode): <span class="pill">${p.can_flash_here}</span><br>
-     Root disk blocked: <span class="pill">${p.root_disk_blocked}</span><br>
-     Write word: <span class="pill">${p.write_word}</span><br>
-     Arm TTL seconds: <span class="pill">${p.arm_ttl_seconds}</span><br><br>
-     <b>Armed:</b> <span class="pill">${armed.active}</span>
-     ${armed.active ? `<br><small>Target: <code>${armed.target}</code><br>Expires: <code>${tsToLocal(armed.expires_at)}</code></small>` : ""}`;
+  // Prime status + planner once early
+  try { await refreshStatusOnce(); } catch {}
+  await ensureTargetsLoaded();
 
   const tSel = document.getElementById("target");
-  tSel.innerHTML = "";
-  (s.eligible_targets || []).forEach(d => {
-    const label = `${d.path} (${d.size||""} ${d.model||""} ${d.serial||""})`;
-    opt(tSel, d.path, label);
-  });
+  const confirmEl = document.getElementById("confirmTarget");
+
+  if (tSel && confirmEl){
+    confirmEl.placeholder = tSel.value || confirmEl.placeholder || "";
+    if (!confirmEl.value) confirmEl.value = tSel.value || "";
+    tSel.addEventListener("change", () => {
+      confirmEl.value = tSel.value;
+      confirmEl.placeholder = tSel.value;
+    });
+  }
 
   await loadOS("");
 
@@ -402,69 +444,119 @@ let lastPlan = null;
   });
 
   document.getElementById("planBtn").addEventListener("click", async () => {
-    const target = tSel.value;
-    const os_id = document.getElementById("os").value;
-    const r = await fetch("/api/plan_flash", {
-      method: "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ target, os_id })
-    });
-    const data = await r.json();
-    lastPlan = { target, os_id, data };
-    document.getElementById("planOut").innerHTML =
-      `<b>Plan output:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+    const out = document.getElementById("planOut");
+    if (out) out.innerHTML = `<span class="pill">working…</span>`;
+
+    await ensureTargetsLoaded();
+
+    const target = (tSel && tSel.value) ? tSel.value : "";
+    const os_id = (document.getElementById("os").value || "").trim();
+
+    if (!target || !os_id){
+      if (out) out.innerHTML = `<b>Plan error:</b> <span class="pill">missing</span> select a target and OS.`;
+      return;
+    }
+
+    let data = null;
+    try{
+      const r = await fetch("/api/plan_flash", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ target, os_id })
+      });
+      const txt = await r.text();
+      data = txt ? JSON.parse(txt) : {};
+      if (!r.ok || (data && data.ok === false)){
+        const msg = (data && data.error) ? data.error : (txt || `HTTP ${r.status}`);
+        throw new Error(msg);
+      }
+    } catch(e){
+      if (out) out.innerHTML = `<b>Plan error:</b><pre>${esc(String(e))}</pre>`;
+      return;
+    }
+
+    lastPlan = {
+      target,
+      os_id,
+      plan_id: data.plan_id || null,
+      expires_at: data.expires_at || null,
+      data
+    };
+
+    const exp = data.expires_at ? tsToLocal(data.expires_at) : "";
+    const pid = data.plan_id ? `<code>${esc(data.plan_id)}</code>` : `<span class="pill">missing plan_id</span>`;
+
+    if (out) out.innerHTML =
+      `<b>Plan:</b><br>` +
+      `<div class="small">Target: <span class="mono">${esc(target)}</span> • OS: <span class="mono">${esc(os_id)}</span></div>` +
+      `<div class="small">plan_id: ${pid}${exp ? (" • Expires: <span class='mono'>" + esc(exp) + "</span>") : ""}</div>` +
+      `<div class="small">Next: ARM will send this plan_id automatically (still no writes).</div>` +
+      `<pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+
+    try { await refreshStatusOnce(); } catch {}
   });
 
   document.getElementById("armBtn").addEventListener("click", async () => {
-    const target = tSel.value;
-    const os_id = document.getElementById("os").value;
+    await ensureTargetsLoaded();
+
+    const target = (tSel && tSel.value) ? tSel.value : "";
+    const os_id = (document.getElementById("os").value || "").trim();
     const word = document.getElementById("word").value || "";
     const confirm_target = document.getElementById("confirmTarget").value || "";
     const serial_suffix = document.getElementById("serialSuffix").value || "";
+
     const r = await fetch("/api/arm", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({ target, os_id, word, confirm_target, serial_suffix })
     });
-    const data = await r.json();
+    const txt = await r.text();
+    const data = txt ? JSON.parse(txt) : {};
+
     document.getElementById("armOut").innerHTML =
-      `<b>ARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+      `<b>ARM response:</b><pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+
+    try { await refreshStatusOnce(); } catch {}
   });
 
-  
   document.getElementById("dlBtn").addEventListener("click", async () => {
-    const os_id = document.getElementById("os").value;
+    const os_id = (document.getElementById("os").value || "").trim();
     const r = await fetch("/api/download_os", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({ os_id })
     });
-    const data = await r.json();
+    const txt = await r.text();
+    const data = txt ? JSON.parse(txt) : {};
+
     document.getElementById("dlOut").innerHTML =
-      `<b>Download request:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+      `<b>Download request:</b><pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
   });
 
-document.getElementById("disarmBtn").addEventListener("click", async () => {
+  document.getElementById("disarmBtn").addEventListener("click", async () => {
     const r = await fetch("/api/disarm", { method: "POST" });
-    const data = await r.json();
+    const txt = await r.text();
+    const data = txt ? JSON.parse(txt) : {};
+
     document.getElementById("armOut").innerHTML =
-      `<b>DISARM response:</b><pre>${JSON.stringify(data, null, 2)}</pre>`;
+      `<b>DISARM response:</b><pre>${esc(JSON.stringify(data, null, 2))}</pre>`;
+
+    try { await refreshStatusOnce(); } catch {}
   });
 })();
 
-  // Job monitor buttons
-  try {
-    document.getElementById("followJobBtn").addEventListener("click", async () => {
-      const id = (document.getElementById("jobId").value || "").trim();
-      startJobFollow(id);
-    });
-    document.getElementById("stopJobBtn").addEventListener("click", async () => {
-      stopJobPoll();
-    });
-  } catch (e) {
-    console.warn("job monitor wiring failed:", e);
-  }
-
-  </script>
+// Job monitor buttons
+try {
+  document.getElementById("followJobBtn").addEventListener("click", async () => {
+    const id = (document.getElementById("jobId").value || "").trim();
+    startJobFollow(id);
+  });
+  document.getElementById("stopJobBtn").addEventListener("click", async () => {
+    stopJobPoll();
+  });
+} catch (e) {
+  console.warn("job monitor wiring failed:", e);
+}
+</script>
 </body>
 </html>
