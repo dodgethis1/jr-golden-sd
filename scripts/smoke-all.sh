@@ -37,3 +37,7 @@ echo "== job status suite =="
 
 echo
 echo "SMOKE ALL OK"
+
+echo
+echo "== plan_flash + arm + disarm suite =="
+bash "$(dirname "$0")/smoke-plan-arm.sh"
