@@ -3,7 +3,7 @@
 ## Project
 - Repo path: `/opt/jr-pi-toolkit/golden-sd`
 - GitHub: `git@github.com:dodgethis1/jr-golden-sd.git`
-- Branch: `main`
+- Branch: `feat/plan-flash-dryrun-token` (current dev); merge to `main` when ready
 
 ## Runtime / Service
 - systemd unit: `jr-golden-sd.service`
