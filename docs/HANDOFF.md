@@ -128,3 +128,13 @@ If the closing terminator line (like `EOF`) gets corrupted or dropped mid-paste,
 
 ### Operator hint
 If a paste gets mangled, the fix is usually: **overwrite the target file completely** with a clean paste block, then re-run the command.
+
+## Regenerate HANDOFF_PASTE.md
+- `docs/HANDOFF_PASTE.md` is generated automatically on service start.
+- During startup/restart it may briefly show `service_active: activating` or `health_ok: false` due to timing.
+- To refresh it after the backend is actually reachable, run:
+
+```bash
+cd /opt/jr-pi-toolkit/golden-sd || exit 1
+./scripts/regenerate-handoff.sh
+```
