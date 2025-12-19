@@ -56,7 +56,12 @@ def load_policy() -> dict:
     # One-word, ALL-CAPS safety token for destructive writes
     default_word = os.environ.get("JR_WRITE_WORD", "ERASE").strip().upper() or "ERASE"
     default_word = re.split(r"\s+", default_word)[0] if default_word else "ERASE"
-    pol = {"write_word": default_word, "arm_ttl_seconds": 600}
+
+    # Optional: allow enabling flashing via env (policy.json can still override)
+    default_flash = os.environ.get("JR_FLASH_ENABLED", "").strip().lower()
+    flash_enabled = default_flash in ("1", "true", "yes", "on")
+
+    pol = {"write_word": default_word, "arm_ttl_seconds": 600, "flash_enabled": flash_enabled}
     try:
         path = os.path.join(BASE_DIR, "data", "policy.json")
         if os.path.exists(path):
@@ -67,10 +72,11 @@ def load_policy() -> dict:
             pol["write_word"] = w
             if "arm_ttl_seconds" in obj:
                 pol["arm_ttl_seconds"] = int(obj["arm_ttl_seconds"])
+            if "flash_enabled" in obj:
+                pol["flash_enabled"] = bool(obj["flash_enabled"])
     except Exception:
         pass
     return pol
-
 def get_version() -> str:
     try:
         return sh(["git", "describe", "--tags", "--always", "--dirty"])
