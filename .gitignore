@@ -24,3 +24,9 @@ static/index.html.bak.*
 # backups
 *.bak.*
 docs/HANDOFF_PASTE.md
+
+# CHAT_CONTEXT_CAPTURES: local saved ChatGPT first-post context blocks
+docs/chat-context/captures/
+
+# ignore scratch scripts (broken/experimental)
+scripts/_scratch/
