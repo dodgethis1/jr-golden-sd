@@ -378,25 +378,25 @@ function renderStatus(safety, disks, armStatus){
   headline.innerHTML =
     `<div class="row" style="align-items:flex-start;">` +
       `<div style="flex: 2 1 360px;">` +
-        `<div class=\"mode\">Mode: ${pill(modeKind, mode)}</div>` +
+        `<div class="mode">Mode: ${pill(modeKind, mode)}</div>` +
         `<div class="small">Root disk: <span class="mono">${esc(rootDisk)}</span> (root_source: <span class="mono">${esc(rootSource)}</span>)</div>` +
         `<div class="small">Version: <span class="mono">${esc(ver)}</span></div>` +
       `</div>` +
       `<div style="flex: 1 1 260px;">` +
         `<div><b>Ready:</b> ${pill(readyKind, readyTxt)}</div>` +
-        `<div><b>Armed:</b> ${pill(armedKind, armed ? \"YES\" : \"no\")}</div>` +
+        `<div><b>Armed:</b> ${pill(armedKind, armed ? "YES" : "no")}</div>` +
         `<div class="small">${(armed && armedExpires) ? ("Expires: " + esc(armedExpires)) : ""}</div>` +
       `</div>` +
     `</div>`;
 
-  policy.classList.toggle(\"ok\", flashEnabled);
-  policy.classList.toggle(\"bad\", !flashEnabled);
+  policy.classList.toggle("ok", flashEnabled);
+  policy.classList.toggle("bad", !flashEnabled);
   policy.innerHTML =
     `<b>Policy:</b><br>` +
-    `<div class=\"small\">Flash policy: ${pill(flashKind, flashTxt)}</div>` +
-    `<div class=\"small\">Can flash here (mode rules): ${pill(canFlashKind, canFlashTxt2)}</div>` +
-    `<div class=\"small\">Write word: ${pill(\"info\", pol.write_word || \"\")} • Arm TTL: ${pill(\"info\", String(pol.arm_ttl_seconds ?? \"\") + \"s\")}</div>` +
-    `<div class=\"small\">Root disk blocked: ${pill(rootBlockedKind, rootBlockedTxt2)} • Requires SD mode: ${pill(reqSDKind, reqSDTxt2)}</div>`;
+    `<div class="small">Flash policy: ${pill(flashKind, flashTxt)}</div>` +
+    `<div class="small">Can flash here (mode rules): ${pill(canFlashKind, canFlashTxt2)}</div>` +
+    `<div class="small">Write word: ${pill("info", pol.write_word || "")} • Arm TTL: ${pill("info", String(pol.arm_ttl_seconds ?? "") + "s")}</div>` +
+    `<div class="small">Root disk blocked: ${pill(rootBlockedKind, rootBlockedTxt2)} • Requires SD mode: ${pill(reqSDKind, reqSDTxt2)}</div>`;
 
   const disksList = (disks && disks.disks) ? disks.disks : [];
   const eligible = (safety && safety.eligible_targets) ? safety.eligible_targets : [];
@@ -414,8 +414,8 @@ function renderStatus(safety, disks, armStatus){
         }).join("") + "</ul>")
     : "<div class='small'>(none)</div>";
 
-  targetsBox.classList.toggle(\"ok\", eligible.length > 0);
-  targetsBox.classList.toggle(\"warn\", eligible.length === 0);
+  targetsBox.classList.toggle("ok", eligible.length > 0);
+  targetsBox.classList.toggle("warn", eligible.length === 0);
 
   targetsBox.innerHTML =
     `<b>Allowed targets (eligible now):</b>${allowedLines}` +
