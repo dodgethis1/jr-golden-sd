@@ -133,6 +133,44 @@
   .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   .log{ max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
   .small{ font-size: 12px; opacity: 0.85; color: var(--muted); }
+
+  /* JR_STATE_COLORS_V1: semantic colors for quick "all green" readiness scanning */
+  :root{
+    --ok: #16a34a;
+    --bad: #dc2626;
+    --amber: #f59e0b;
+    --info: var(--link);
+  }
+  :root[data-theme="dark"]{
+    --ok: #22c55e;
+    --bad: #ff5566;
+    --amber: #fbbf24;
+    --info: var(--link);
+  }
+
+  /* override earlier warn usage to actually be amber */
+  .warn { border-color: var(--amber); }
+
+  .box.ok  { border-color: var(--ok); }
+  .box.bad { border-color: var(--bad); }
+
+  .pill.ok {
+    border-color: var(--ok);
+    background: color-mix(in srgb, var(--ok) 18%, var(--pill-bg));
+  }
+  .pill.bad {
+    border-color: var(--bad);
+    background: color-mix(in srgb, var(--bad) 16%, var(--pill-bg));
+  }
+  .pill.warn {
+    border-color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 18%, var(--pill-bg));
+  }
+  .pill.info {
+    border-color: var(--info);
+    background: color-mix(in srgb, var(--info) 16%, var(--pill-bg));
+  }
+
 </style>
 </head>
 <body>
@@ -271,6 +309,17 @@ function tsToLocal(ts){
 function esc(x){
   return String(x ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 }
+
+// JR_STATE_COLORS_V1 helpers
+function pill(kind, txt){
+  const k = kind ? (" " + kind) : "";
+  return `<span class="pill${k}">${esc(txt)}</span>`;
+}
+function pillBool(v, okTxt="true", badTxt="false"){
+  return pill(v ? "ok" : "bad", v ? okTxt : badTxt);
+}
+// end JR_STATE_COLORS_V1 helpers
+
 function fmtDisk(d){
   const path = d.path || "";
   const size = d.size ? ` (${esc(d.size)})` : "";
@@ -287,12 +336,37 @@ function renderStatus(safety, disks, armStatus){
 
   const st = (safety && safety.state) || {};
   const pol = (safety && safety.policy) || {};
+  // eligible defined above
   const ver = (safety && safety.version) ? safety.version : "";
 
   const mode = st.mode || "unknown";
   const rootParent = st.root_parent || "";
   const rootSource = st.root_source || "";
   const rootDisk = rootParent ? ("/dev/" + rootParent) : "(unknown)";
+
+  const modeKind = (mode === "SD") ? "ok" : "warn";
+
+  const canFlashKnown = (pol.can_flash_here !== undefined && pol.can_flash_here !== null);
+  const canFlashVal = (pol.can_flash_here === true);
+  const canFlashKind = canFlashKnown ? (canFlashVal ? "ok" : "bad") : "warn";
+  const canFlashTxt2 = canFlashKnown ? String(canFlashVal) : "unknown";
+
+  const rootBlockedKnown = (pol.root_disk_blocked !== undefined && pol.root_disk_blocked !== null);
+  const rootBlockedVal = (pol.root_disk_blocked === true);
+  const rootBlockedKind = rootBlockedKnown ? (rootBlockedVal ? "ok" : "bad") : "warn";
+  const rootBlockedTxt2 = rootBlockedKnown ? String(rootBlockedVal) : "unknown";
+
+  const reqSDKnown = (pol.requires_sd_mode !== undefined && pol.requires_sd_mode !== null);
+  const reqSDVal = (pol.requires_sd_mode === true);
+  const reqSDKind = reqSDKnown ? ((reqSDVal && mode === "SD") ? "ok" : (reqSDVal ? "warn" : "bad")) : "warn";
+  const reqSDTxt2 = reqSDKnown ? String(reqSDVal) : "unknown";
+
+  const flashKind = flashEnabled ? "ok" : "bad";
+  const armedKind = armed ? "ok" : "bad";
+
+  const ready = !!(flashEnabled && canFlashVal && rootBlockedVal && (mode === "SD") && (eligible.length > 0));
+  const readyKind = ready ? "ok" : "bad";
+  const readyTxt  = ready ? "READY" : "NOT READY";
 
   const armed = (armStatus && armStatus.active) || (safety && safety.armed && safety.armed.active) || false;
   const armedExpires = (safety && safety.armed && safety.armed.expires_at) ? tsToLocal(safety.armed.expires_at) : "";
@@ -304,39 +378,44 @@ function renderStatus(safety, disks, armStatus){
   headline.innerHTML =
     `<div class="row" style="align-items:flex-start;">` +
       `<div style="flex: 2 1 360px;">` +
-        `<div class="mode">Mode: <span class="pill">${esc(mode)}</span></div>` +
+        `<div class=\"mode\">Mode: ${pill(modeKind, mode)}</div>` +
         `<div class="small">Root disk: <span class="mono">${esc(rootDisk)}</span> (root_source: <span class="mono">${esc(rootSource)}</span>)</div>` +
         `<div class="small">Version: <span class="mono">${esc(ver)}</span></div>` +
       `</div>` +
       `<div style="flex: 1 1 260px;">` +
-        `<div><b>Armed:</b> <span class="pill">${armed ? "YES" : "no"}</span></div>` +
+        `<div><b>Ready:</b> ${pill(readyKind, readyTxt)}</div>` +
+        `<div><b>Armed:</b> ${pill(armedKind, armed ? \"YES\" : \"no\")}</div>` +
         `<div class="small">${(armed && armedExpires) ? ("Expires: " + esc(armedExpires)) : ""}</div>` +
       `</div>` +
     `</div>`;
 
-  policy.classList.toggle("warn", !flashEnabled);
+  policy.classList.toggle(\"ok\", flashEnabled);
+  policy.classList.toggle(\"bad\", !flashEnabled);
   policy.innerHTML =
     `<b>Policy:</b><br>` +
-    `<div class="small">Flash policy: <span class="pill">${flashTxt}</span></div>` +
-    `<div class="small">Can flash here (mode rules): <span class="pill">${esc(canFlashHere)}</span></div>` +
-    `<div class="small">Write word: <span class="pill">${esc(pol.write_word || "")}</span> • Arm TTL: <span class="pill">${esc(pol.arm_ttl_seconds ?? "")}s</span></div>` +
-    `<div class="small">Root disk blocked: <span class="pill">${esc(pol.root_disk_blocked ?? "")}</span> • Requires SD mode: <span class="pill">${esc(pol.requires_sd_mode ?? "")}</span></div>`;
+    `<div class=\"small\">Flash policy: ${pill(flashKind, flashTxt)}</div>` +
+    `<div class=\"small\">Can flash here (mode rules): ${pill(canFlashKind, canFlashTxt2)}</div>` +
+    `<div class=\"small\">Write word: ${pill(\"info\", pol.write_word || \"\")} • Arm TTL: ${pill(\"info\", String(pol.arm_ttl_seconds ?? \"\") + \"s\")}</div>` +
+    `<div class=\"small\">Root disk blocked: ${pill(rootBlockedKind, rootBlockedTxt2)} • Requires SD mode: ${pill(reqSDKind, reqSDTxt2)}</div>`;
 
   const disksList = (disks && disks.disks) ? disks.disks : [];
   const eligible = (safety && safety.eligible_targets) ? safety.eligible_targets : [];
   const eligiblePaths = new Set(eligible.map(x => x.path));
 
   const allowedLines = eligible.length
-    ? ("<ul>" + eligible.map(d => `<li>${fmtDisk(d)}</li>`).join("") + "</ul>")
+    ? ("<ul>" + eligible.map(d => `<li>✓ ${fmtDisk(d)} ${pill("ok","allowed")}</li>`).join("") + "</ul>")
     : "<div class='small'>(none)</div>";
 
   const blocked = disksList.filter(d => !eligiblePaths.has(d.path));
   const blockedLines = blocked.length
     ? ("<ul>" + blocked.map(d => {
           const reason = d.is_root_disk ? "blocked: root disk" : "blocked: not eligible in current mode";
-          return `<li>${fmtDisk(d)} <span class="pill">${esc(reason)}</span></li>`;
+          return `<li>✗ ${fmtDisk(d)} ${pill("bad", reason)}</li>`;
         }).join("") + "</ul>")
     : "<div class='small'>(none)</div>";
+
+  targetsBox.classList.toggle(\"ok\", eligible.length > 0);
+  targetsBox.classList.toggle(\"warn\", eligible.length === 0);
 
   targetsBox.innerHTML =
     `<b>Allowed targets (eligible now):</b>${allowedLines}` +
