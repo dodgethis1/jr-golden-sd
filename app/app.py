@@ -1245,6 +1245,13 @@ PY2
 
     job = start_job("download_os", script, {"os_id": os_id, "url": url, "out": paths["bin"]})
 
+    # start_job() may return a dict or a string; normalize to job_id
+    job_id = None
+    if isinstance(job, dict):
+        job_id = job.get('job_id') or job.get('id') or job.get('job') or job.get('jid')
+    else:
+        job_id = str(job) if job is not None else None
+    return jsonify({'ok': True, 'cached': False, 'job_id': job_id, 'job': job, 'paths': paths}), 202
 @app.get("/api/qr")
 def api_qr():
     url = request.args.get("u", "").strip()
