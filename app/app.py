@@ -323,6 +323,65 @@ def clear_arm_state():
         pass
 
 
+
+# ---------------- plans (DRY-RUN tokens) ----------------
+
+def plans_dir() -> str:
+  ensure_cache_dir()
+  d = os.path.join(CACHE_DIR, "plans")
+  os.makedirs(d, exist_ok=True)
+  return d
+
+def plan_file(plan_id: str) -> str:
+  return os.path.join(plans_dir(), f"{plan_id}.json")
+
+def plan_load(plan_id: str) -> dict | None:
+  if not plan_id:
+    return None
+  fp = plan_file(plan_id)
+  if not os.path.exists(fp):
+    return None
+  try:
+    return json.loads(Path(fp).read_text(encoding="utf-8"))
+  except Exception:
+    return None
+
+def plan_save(plan: dict):
+  plan["updated_at"] = time.time()
+  Path(plan_file(plan["id"])).write_text(json.dumps(plan), encoding="utf-8")
+
+def plan_clear(plan_id: str):
+  try:
+    fp = plan_file(plan_id)
+    if os.path.exists(fp):
+      os.remove(fp)
+  except Exception:
+    pass
+
+def snapshot_digest_from_device_snapshot(snap: dict) -> str:
+  obj = {
+    "root_source": snap.get("root_source"),
+    "root_parent": snap.get("root_parent"),
+    "mode": snap.get("mode"),
+    "disks": [
+      {
+        "name": d.get("name"),
+        "path": d.get("path"),
+        "size": d.get("size"),
+        "model": d.get("model"),
+        "tran": d.get("tran"),
+        "rm": d.get("rm"),
+        "ro": d.get("ro"),
+        "mountpoints": d.get("mountpoints"),
+        "is_root_parent": d.get("is_root_parent"),
+        "allowed_target_option_a": d.get("allowed_target_option_a"),
+      }
+      for d in (snap.get("disks") or [])
+    ],
+  }
+  b = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  return hashlib.sha256(b).hexdigest()
+
 # ---------------- jobs (downloads, later flash) ----------------
 
 def jobs_dir() -> str:
@@ -643,107 +702,182 @@ def api_os():
         catalog = [x for x in catalog if (q in x["name"].lower() or q in (x["description"] or "").lower())]
     return jsonify({"count": len(catalog), "items": catalog[:250]})
 
+
 @app.post("/api/plan_flash")
 def api_plan_flash():
-    # DRY-RUN plan only
-    body = request.get_json(force=True, silent=True) or {}
-    target = str(body.get("target", "")).strip()
-    os_id = str(body.get("os_id", "")).strip()
+  # DRY-RUN plan only (no writes). Produces a short-lived plan_id token required for /api/arm.
+  body = request.get_json(force=True, silent=True) or {}
+  target = str(body.get("target", "")).strip()
+  os_id = str(body.get("os_id", "")).strip()
 
-    s = safety_state()
-    eligible_paths = {x["path"] for x in s["eligible_targets"]}
+  if target and not target.startswith("/dev/"):
+    target = "/dev/" + target.lstrip("/")
 
-    if not s["can_flash_here"]:
-        return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
-    if target not in eligible_paths:
-        return jsonify({"ok": False, "error": f"Target {target} is not an eligible target (root disk is blocked)."}), 400
+  sstate = safety_state()
+  if not sstate["can_flash_here"]:
+    return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
 
-    catalog = load_os_catalog()
-    os_item = find_os(os_id, catalog)
-    if not os_item:
-        return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
+  snap = device_snapshot()
+  allowed = {d.get("path"): d for d in (snap.get("disks") or []) if d.get("allowed_target_option_a")}
+  if not target or target not in allowed:
+    return jsonify({
+      "ok": False,
+      "error": f"Target {target} is not an eligible target (Option A gating).",
+      "snapshot": {"mode": snap.get("mode"), "root_parent": snap.get("root_parent")}
+    }), 400
 
-    pol = load_policy()
-    url = os_item["url"]
+  catalog = load_os_catalog()
+  os_item = find_os(os_id, catalog)
+  if not os_item:
+    return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
 
-    plan = {
-        "ok": True,
-        "note": "DRY-RUN ONLY. No writes occur in this build.",
-        "confirmations_required": [
-            {"type": "WORD", "value": pol.get("write_word", "ERASE")},
-            {"type": "TARGET", "value": target},
-        ],
-        "target": target,
-        "os": {
-            "id": os_item["id"],
-            "name": os_item["name"],
-            "provider": os_item["provider_label"],
-            "release_date": os_item.get("release_date"),
-            "url": url,
-            "download_sha256": os_item.get("image_download_sha256"),
-            "extract_sha256": os_item.get("extract_sha256"),
-            "download_size": os_item.get("image_download_size"),
-            "extract_size": os_item.get("extract_size"),
-        },
-        "steps": [
-            {"step": 1, "action": "Re-check safety", "detail": "Confirm target is not the root disk and SD mode is active."},
-            {"step": 2, "action": "Download image", "detail": f"curl -L '{url}' -o cache/os.img (or cache/os.img.xz/zip)"},
-            {"step": 3, "action": "Verify checksum (if available)", "detail": "Compare SHA256 of download/extract if publisher hash is provided."},
-            {"step": 4, "action": "Decompress + write", "detail": f"{guess_decompress_cmd(url)} cache/os.* | sudo dd of={target} bs=4M conv=fsync status=progress"},
-            {"step": 5, "action": "Sync + re-read partition table", "detail": "sync; sudo partprobe"},
-        ],
-        "warnings": [
-            "This plan will destroy all data on the target disk when we enable flashing.",
-            "Root disk is always blocked. Target must be explicitly selected and confirmed.",
-        ]
-    }
-    return jsonify(plan)
+  pol = load_policy()
+  url = os_item["url"]
+
+  now = time.time()
+  ttl = int(pol.get("arm_ttl_seconds", 600))  # plan TTL defaults to arm TTL for now
+  plan_id = secrets.token_urlsafe(16)
+  snap_digest = snapshot_digest_from_device_snapshot(snap)
+
+  plan = {
+    "id": plan_id,
+    "issued_at": now,
+    "expires_at": now + ttl,
+    "snapshot_digest": snap_digest,
+    "snapshot": {
+      "mode": snap.get("mode"),
+      "root_source": snap.get("root_source"),
+      "root_parent": snap.get("root_parent"),
+    },
+    "target": target,
+    "os_id": os_item["id"],
+    "os_url": url,
+  }
+  plan_save(plan)
+
+  out = {
+    "ok": True,
+    "note": "DRY-RUN ONLY. No writes occur in this build. plan_id is required for /api/arm (and later /api/flash).",
+    "plan_id": plan_id,
+    "expires_at": plan["expires_at"],
+    "confirmations_required": [
+      {"type": "WORD", "value": pol.get("write_word", "ERASE")},
+      {"type": "TARGET", "value": target},
+    ],
+    "target": target,
+    "os": {
+      "id": os_item["id"],
+      "name": os_item["name"],
+      "provider": os_item["provider_label"],
+      "release_date": os_item.get("release_date"),
+      "url": url,
+      "download_sha256": os_item.get("image_download_sha256"),
+      "extract_sha256": os_item.get("extract_sha256"),
+      "download_size": os_item.get("image_download_size"),
+      "extract_size": os_item.get("extract_size"),
+    },
+    "steps": [
+      {"step": 1, "action": "Re-check safety", "detail": "Confirm target is not the root disk and SD mode is active."},
+      {"step": 2, "action": "Download image", "detail": f"curl -L '{url}' -o cache/os.* (or use /api/download_os)"},
+      {"step": 3, "action": "Verify checksum (if available)", "detail": "Compare SHA256 of download/extract if publisher hash is provided."},
+      {"step": 4, "action": "Decompress + write", "detail": f"{guess_decompress_cmd(url)} cache/os.* | sudo dd of={target} bs=4M conv=fsync status=progress"},
+      {"step": 5, "action": "Sync + re-read partition table", "detail": "sync; sudo partprobe"},
+    ],
+    "warnings": [
+      "This plan will destroy all data on the target disk when flashing is enabled.",
+      "Root disk is always blocked. Target must be explicitly selected and confirmed.",
+    ],
+  }
+  return jsonify(out)
 
 @app.get("/api/arm_status")
 def arm_status():
     st = load_arm_state()
     return jsonify({"active": bool(st), "state": st})
 
+
 @app.post("/api/arm")
 def arm():
-    # STILL NO WRITES. This just creates a short-lived token that a future /api/flash will require.
-    body = request.get_json(force=True, silent=True) or {}
-    target = str(body.get("target", "")).strip()
-    os_id = str(body.get("os_id", "")).strip()
-    word = str(body.get("word", "")).strip().upper()
-    confirm_target = str(body.get("confirm_target", "")).strip()
-    serial_suffix = str(body.get("serial_suffix", "")).strip()
+  # STILL NO WRITES. This just creates a short-lived token that a future /api/flash will require.
+  body = request.get_json(force=True, silent=True) or {}
+  plan_id = str(body.get("plan_id") or body.get("plan_token") or "").strip()
+  target = str(body.get("target", "")).strip()
+  os_id = str(body.get("os_id", "")).strip()
+  word = str(body.get("word", "")).strip().upper()
+  confirm_target = str(body.get("confirm_target", "")).strip()
+  serial_suffix = str(body.get("serial_suffix", "")).strip()
 
-    pol = load_policy()
-    s = safety_state()
-    eligible = {x["path"]: x for x in s["eligible_targets"]}
+  if not plan_id:
+    return jsonify({"ok": False, "error": "plan_id required. Call /api/plan_flash first."}), 400
 
-    if not s["can_flash_here"]:
-        return jsonify({"ok": False, "error": "Not in SD mode. Arming is only allowed when booted from SD."}), 400
-    if target not in eligible:
-        return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
-    if confirm_target != target:
-        return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
-    if word != pol.get("write_word", "ERASE"):
-        return jsonify({"ok": False, "error": f"Write word must be exactly: {pol.get('write_word','ERASE')}"}), 400
+  if target and not target.startswith("/dev/"):
+    target = "/dev/" + target.lstrip("/")
+  if confirm_target and not confirm_target.startswith("/dev/"):
+    confirm_target = "/dev/" + confirm_target.lstrip("/")
 
-    if serial_suffix:
-        actual = (eligible[target].get("serial") or "")
-        if actual and not actual.endswith(serial_suffix):
-            return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
+  pol = load_policy()
+  s = safety_state()
+  eligible = {x["path"]: x for x in s["eligible_targets"]}
 
-    ttl = int(pol.get("arm_ttl_seconds", 600))
-    now = time.time()
-    token = secrets.token_urlsafe(16)
-    st = {
-        "token": token,
-        "target": target,
-        "os_id": os_id,
-        "issued_at": now,
-        "expires_at": now + ttl,
-    }
-    save_arm_state(st)
-    return jsonify({"ok": True, "armed": True, "state": st})
+  if not s["can_flash_here"]:
+    return jsonify({"ok": False, "error": "Not in SD mode. Arming is only allowed when booted from SD."}), 400
+
+  plan = plan_load(plan_id)
+  if not plan:
+    return jsonify({"ok": False, "error": "Unknown plan_id. Call /api/plan_flash again."}), 400
+
+  now = time.time()
+  exp = float(plan.get("expires_at") or 0)
+  if exp <= now:
+    plan_clear(plan_id)
+    return jsonify({"ok": False, "error": "Plan expired. Re-run /api/plan_flash."}), 400
+
+  p_target = str(plan.get("target") or "").strip()
+  p_os = str(plan.get("os_id") or "").strip()
+  if not target:
+    target = p_target
+  if not os_id:
+    os_id = p_os
+  if target != p_target:
+    return jsonify({"ok": False, "error": "plan_id target does not match requested target."}), 400
+  if os_id != p_os:
+    return jsonify({"ok": False, "error": "plan_id os_id does not match requested os_id."}), 400
+
+  snap = device_snapshot()
+  snap_digest = snapshot_digest_from_device_snapshot(snap)
+  if snap_digest != str(plan.get("snapshot_digest") or ""):
+    return jsonify({"ok": False, "error": "Device state changed since plan. Re-run /api/plan_flash."}), 400
+
+  allowed = {d.get("path"): d for d in (snap.get("disks") or []) if d.get("allowed_target_option_a")}
+  if target not in allowed:
+    return jsonify({"ok": False, "error": "Target is no longer eligible under Option A gating."}), 400
+
+  if target not in eligible:
+    return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
+  if confirm_target != target:
+    return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
+  if word != pol.get("write_word", "ERASE"):
+    return jsonify({"ok": False, "error": f"Write word must be exactly: {pol.get('write_word','ERASE')}"}), 400
+
+  if serial_suffix:
+    actual = (eligible[target].get("serial") or "")
+    if actual and not actual.endswith(serial_suffix):
+      return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
+
+  ttl = int(pol.get("arm_ttl_seconds", 600))
+  token = secrets.token_urlsafe(16)
+  st = {
+    "token": token,
+    "plan_id": plan_id,
+    "plan_expires_at": plan.get("expires_at"),
+    "plan_snapshot_digest": snap_digest,
+    "target": target,
+    "os_id": os_id,
+    "issued_at": now,
+    "expires_at": now + ttl,
+  }
+  save_arm_state(st)
+  return jsonify({"ok": True, "armed": True, "state": st})
 
 @app.post("/api/disarm")
 def disarm():
@@ -752,80 +886,119 @@ def disarm():
 
 
 
+
 @app.post("/api/flash")
 def api_flash():
-    """
-    DESTRUCTIVE: Writes a cached OS image to a target disk.
-    Requires:
-      - SD mode (safety_state().can_flash_here)
-      - policy.flash_enabled == true
-      - valid, unexpired ARM token matching target + os_id
-    """
-    body = request.get_json(force=True, silent=True) or {}
-    target = str(body.get("target", "")).strip()
-    os_id = str(body.get("os_id", "")).strip()
-    token = str(body.get("token", "")).strip()
-    confirm_target = str(body.get("confirm_target", "")).strip()
-    serial_suffix = str(body.get("serial_suffix", "")).strip()
+  """
+  DESTRUCTIVE: Writes a cached OS image to a target disk.
+  Requires:
+    - SD mode (safety_state().can_flash_here)
+    - policy.flash_enabled == true
+    - valid, unexpired ARM token matching target + os_id
+    - valid, unexpired plan_id bound to the same snapshot + target + os_id
+  """
+  body = request.get_json(force=True, silent=True) or {}
+  target = str(body.get("target", "")).strip()
+  os_id = str(body.get("os_id", "")).strip()
+  token = str(body.get("token", "")).strip()
+  confirm_target = str(body.get("confirm_target", "")).strip()
+  serial_suffix = str(body.get("serial_suffix", "")).strip()
+  plan_id_req = str(body.get("plan_id") or body.get("plan_token") or "").strip()
 
-    pol = load_policy()
-    if not bool(pol.get("flash_enabled", False)):
-        return jsonify({"ok": False, "error": "Flashing is disabled (policy.flash_enabled=false)."}), 403
+  if target and not target.startswith("/dev/"):
+    target = "/dev/" + target.lstrip("/")
+  if confirm_target and not confirm_target.startswith("/dev/"):
+    confirm_target = "/dev/" + confirm_target.lstrip("/")
 
-    sstate = safety_state()
-    eligible = {x["path"]: x for x in sstate["eligible_targets"]}
+  pol = load_policy()
+  if not bool(pol.get("flash_enabled", False)):
+    return jsonify({"ok": False, "error": "Flashing is disabled (policy.flash_enabled=false)."}), 403
 
-    if not sstate["can_flash_here"]:
-        return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
-    if not target or target not in eligible:
-        return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
-    if confirm_target and confirm_target != target:
-        return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
+  sstate = safety_state()
+  eligible = {x["path"]: x for x in sstate["eligible_targets"]}
 
-    armed = load_arm_state()
-    if not armed:
-        return jsonify({"ok": False, "error": "Not armed. Call /api/arm first."}), 400
+  if not sstate["can_flash_here"]:
+    return jsonify({"ok": False, "error": "Not in SD mode. Flashing is only allowed when booted from SD."}), 400
+  if not target or target not in eligible:
+    return jsonify({"ok": False, "error": "Target is not eligible (root disk is blocked)."}), 400
+  if confirm_target and confirm_target != target:
+    return jsonify({"ok": False, "error": "Target confirmation does not match exactly."}), 400
 
-    now = time.time()
-    exp = float(armed.get("expires_at") or 0)
-    if exp <= now:
-        clear_arm_state()
-        return jsonify({"ok": False, "error": "ARM token expired. Re-arm and try again."}), 400
+  armed = load_arm_state()
+  if not armed:
+    return jsonify({"ok": False, "error": "Not armed. Call /api/arm first."}), 400
 
-    if armed.get("target") != target:
-        return jsonify({"ok": False, "error": "ARM state target does not match requested target."}), 400
-
-    if not os_id:
-        os_id = str(armed.get("os_id") or "").strip()
-    if not os_id:
-        return jsonify({"ok": False, "error": "os_id required (and must match what you armed with)."}), 400
-    if armed.get("os_id") and armed.get("os_id") != os_id:
-        return jsonify({"ok": False, "error": "ARM state os_id does not match requested os_id."}), 400
-
-    if not token or token != str(armed.get("token") or ""):
-        return jsonify({"ok": False, "error": "Invalid or missing token. Use the token returned by /api/arm."}), 400
-
-    if serial_suffix:
-        actual = (eligible[target].get("serial") or "")
-        if actual and not actual.endswith(serial_suffix):
-            return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
-
-    catalog = load_os_catalog()
-    os_item = find_os(os_id, catalog)
-    if not os_item:
-        return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
-
-    url = os_item["url"]
-    paths = os_cache_paths(os_id, url)
-    in_path = paths["bin"]
-
-    if not os.path.exists(in_path):
-        return jsonify({"ok": False, "error": "OS image not cached. Call /api/download_os first.", "paths": paths}), 400
-
-    # One-shot: disarm immediately so the token can't be reused.
+  now = time.time()
+  exp = float(armed.get("expires_at") or 0)
+  if exp <= now:
     clear_arm_state()
+    return jsonify({"ok": False, "error": "ARM token expired. Re-arm and try again."}), 400
 
-    script = f"""
+  if armed.get("target") != target:
+    return jsonify({"ok": False, "error": "ARM state target does not match requested target."}), 400
+
+  if not os_id:
+    os_id = str(armed.get("os_id") or "").strip()
+  if not os_id:
+    return jsonify({"ok": False, "error": "os_id required (and must match what you armed with)."}), 400
+  if armed.get("os_id") and armed.get("os_id") != os_id:
+    return jsonify({"ok": False, "error": "ARM state os_id does not match requested os_id."}), 400
+
+  if not token or token != str(armed.get("token") or ""):
+    return jsonify({"ok": False, "error": "Invalid or missing token. Use the token returned by /api/arm."}), 400
+
+  plan_id = str(armed.get("plan_id") or "").strip()
+  if plan_id_req and plan_id_req != plan_id:
+    return jsonify({"ok": False, "error": "plan_id does not match what you armed with."}), 400
+  if not plan_id:
+    return jsonify({"ok": False, "error": "Missing plan. Call /api/plan_flash then /api/arm with plan_id."}), 400
+
+  plan = plan_load(plan_id)
+  if not plan:
+    return jsonify({"ok": False, "error": "Unknown plan_id. Re-run /api/plan_flash and /api/arm."}), 400
+
+  pexp = float(plan.get("expires_at") or 0)
+  if pexp <= now:
+    plan_clear(plan_id)
+    clear_arm_state()
+    return jsonify({"ok": False, "error": "Plan expired. Re-run /api/plan_flash and /api/arm."}), 400
+
+  if str(plan.get("target") or "") != target:
+    return jsonify({"ok": False, "error": "Plan target does not match requested target."}), 400
+  if str(plan.get("os_id") or "") != os_id:
+    return jsonify({"ok": False, "error": "Plan os_id does not match requested os_id."}), 400
+
+  snap = device_snapshot()
+  snap_digest = snapshot_digest_from_device_snapshot(snap)
+  if snap_digest != str(plan.get("snapshot_digest") or ""):
+    return jsonify({"ok": False, "error": "Device state changed since plan. Re-run /api/plan_flash."}), 400
+
+  allowed = {d.get("path"): d for d in (snap.get("disks") or []) if d.get("allowed_target_option_a")}
+  if target not in allowed:
+    return jsonify({"ok": False, "error": "Target is no longer eligible under Option A gating."}), 400
+
+  if serial_suffix:
+    actual = (eligible[target].get("serial") or "")
+    if actual and not actual.endswith(serial_suffix):
+      return jsonify({"ok": False, "error": "Serial suffix does not match target disk."}), 400
+
+  catalog = load_os_catalog()
+  os_item = find_os(os_id, catalog)
+  if not os_item:
+    return jsonify({"ok": False, "error": "Unknown os_id. Refresh OS list and try again."}), 400
+
+  url = os_item["url"]
+  paths = os_cache_paths(os_id, url)
+  in_path = paths["bin"]
+
+  if not os.path.exists(in_path):
+    return jsonify({"ok": False, "error": "OS image not cached. Call /api/download_os first.", "paths": paths}), 400
+
+  # One-shot: clear ARM + plan immediately so tokens can't be reused.
+  clear_arm_state()
+  plan_clear(plan_id)
+
+  script = f"""
 echo "=== FLASH JOB ==="
 echo "TARGET={shlex_quote(target)}"
 echo "IN={shlex_quote(in_path)}"
@@ -879,15 +1052,14 @@ $SUDO udevadm settle 2>/dev/null || true
 echo "=== FLASH COMPLETE ==="
 """
 
-    job = start_job("flash", script, {
-        "os_id": os_id,
-        "url": url,
-        "in": in_path,
-        "target": target,
-        "paths": paths,
-    })
-    return jsonify({"ok": True, "job_id": job["id"], "job": job, "paths": paths})
-
+  job = start_job("flash", script, {
+    "os_id": os_id,
+    "url": url,
+    "in": in_path,
+    "target": target,
+    "paths": paths,
+  })
+  return jsonify({"ok": True, "job_id": job["id"], "job": job, "paths": paths})
 
 @app.get("/api/job/<job_id>")
 def api_job(job_id: str):
