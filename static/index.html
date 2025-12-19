@@ -309,6 +309,41 @@ function renderStatus(safety, disks, armStatus){
     `<b>Detected disks (blocked):</b>${blockedLines}`;
 }
 
+// JR_STATE_CUES_V1
+  function _jrSetState(el, cls){
+    if (!el) return;
+    el.classList.remove("state-ok","state-warn","state-bad");
+    if (cls) el.classList.add(cls);
+  }
+
+  function applyStateClasses(safety, disks, arm){
+    const policy = (safety && safety.policy) ? safety.policy : {};
+    const eligible = (safety && safety.eligible_targets) ? safety.eligible_targets : [];
+    const armed = !!(arm && (arm.active || (arm.armed && arm.armed.active)));
+
+    const flashEnabled = (policy.flash_enabled === true);
+    const canFlashHere = (policy.can_flash_here === true);
+    const rootBlocked  = (policy.root_disk_blocked !== false);
+
+    // READY means: backend reachable (we’re in the success path), safety allows flashing here, root is blocked, and at least one eligible target exists.
+    const ready = flashEnabled && canFlashHere && rootBlocked && (eligible.length > 0);
+
+    // Apply “traffic light” to key panels
+    _jrSetState(document.getElementById("headline"), ready ? "state-ok" : "state-warn");
+    _jrSetState(document.getElementById("policy"),   canFlashHere ? (armed ? "state-warn" : "state-ok") : "state-bad");
+    _jrSetState(document.getElementById("targetsBox"), (eligible.length > 0) ? "state-ok" : "state-warn");
+
+    // Body-level hints for CSS
+    try{
+      document.body.classList.toggle("armed", armed);
+      document.body.classList.add("backend-up");
+      document.body.classList.remove("backend-down");
+    }catch{}
+  }
+  // end JR_STATE_CUES_V1
+
+
+
 let _statusTimer = null;
 
 async function refreshStatusOnce(){
@@ -318,12 +353,16 @@ async function refreshStatusOnce(){
     const disks  = await j("/api/disks",  {retries: 12, delay_ms: 250});
     const arm    = await j("/api/arm_status", {retries: 12, delay_ms: 250});
     renderStatus(safety, disks, arm);
-    syncPlannerFromSafety(safety);
+    
+      try { applyStateClasses(safety, disks, arm); } catch (e) { console.warn('applyStateClasses failed:', e); }
+syncPlannerFromSafety(safety);
   } catch (e) {
     const headline = document.getElementById("headline");
     const targetsBox = document.getElementById("targetsBox");
     if (headline) headline.textContent = "Backend starting… (retrying)";
-    if (targetsBox) targetsBox.textContent = "Waiting for backend…";
+    
+      try{ document.body.classList.add('backend-down'); document.body.classList.remove('backend-up'); }catch{}
+if (targetsBox) targetsBox.textContent = "Waiting for backend…";
   }
 }
 
