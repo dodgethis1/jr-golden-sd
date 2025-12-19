@@ -1,218 +1,213 @@
 from pathlib import Path
 import re
-import time
 import sys
 
 p = Path("static/index.html")
-text = p.read_text(encoding="utf-8")
+s = p.read_text(encoding="utf-8")
 
-stamp = time.strftime("%Y%m%d-%H%M%S")
-bak = p.with_name(f"index.html.bak.{stamp}")
-bak.write_text(text, encoding="utf-8")
+if "JR_THEME_TOGGLE_V1" in s:
+    print("OK: theme toggle already present")
+    sys.exit(0)
 
-NEW_STYLE = r"""<style>
+# Replace the entire <style>...</style> block with a themed version.
+style_re = re.compile(r"<style>\s*.*?\s*</style>", re.DOTALL | re.IGNORECASE)
+new_style = """<style>
+  /* JR_THEME_TOGGLE_V1: light/dark + a little color */
+  html { color-scheme: light dark; }
+
   :root{
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --text: #111827;
-    --muted: rgba(17,24,39,.72);
-    --border: rgba(17,24,39,.18);
-    --pill: rgba(17,24,39,.06);
-    --mono-bg: rgba(17,24,39,.06);
+    --bg: #ffffff;
+    --fg: #0b1220;
+    --muted: #4b5563;
+    --box: #ffffff;
+    --border: #cfd6de;
+
+    --pill-bg: #eef2f6;
+    --pill-fg: #0b1220;
+
+    --pre-bg: #eef2f6;
+
+    --link: #1d4ed8;
+    --accent: #16a34a;
     --warn: #b00020;
-    --ok: #0a7b34;
-    --link: #0b63ce;
-    --shadow: 0 1px 2px rgba(0,0,0,.06);
+
+    --btn-bg: #0f172a;
+    --btn-fg: #ffffff;
+    --btn-border: #0f172a;
   }
 
-  /* Default to system dark mode */
+  /* If user doesn't choose, follow system preference */
   @media (prefers-color-scheme: dark){
-    :root{
-      --bg: #0b1220;
-      --panel: #0f1b33;
-      --text: #e5e7eb;
-      --muted: rgba(229,231,235,.72);
-      --border: rgba(229,231,235,.18);
-      --pill: rgba(229,231,235,.08);
-      --mono-bg: rgba(229,231,235,.08);
-      --warn: #ff4d6d;
-      --ok: #2bd576;
-      --link: #7ab7ff;
-      --shadow: 0 1px 2px rgba(0,0,0,.35);
+    :root:not([data-theme]){
+      --bg: #0b0f14;
+      --fg: #e6edf3;
+      --muted: #9aa4ad;
+      --box: #111826;
+      --border: #2b3442;
+
+      --pill-bg: #1f2a37;
+      --pill-fg: #e6edf3;
+
+      --pre-bg: #0f172a;
+
+      --link: #7aa2ff;
+      --accent: #22c55e;
+      --warn: #ff5566;
+
+      --btn-bg: #1f2a37;
+      --btn-fg: #e6edf3;
+      --btn-border: #2b3442;
     }
   }
 
-  /* Manual overrides (button cycles these) */
-  body.theme-light{
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --text: #111827;
-    --muted: rgba(17,24,39,.72);
-    --border: rgba(17,24,39,.18);
-    --pill: rgba(17,24,39,.06);
-    --mono-bg: rgba(17,24,39,.06);
-    --warn: #b00020;
-    --ok: #0a7b34;
-    --link: #0b63ce;
-    --shadow: 0 1px 2px rgba(0,0,0,.06);
-  }
-  body.theme-dark{
-    --bg: #0b1220;
-    --panel: #0f1b33;
-    --text: #e5e7eb;
-    --muted: rgba(229,231,235,.72);
-    --border: rgba(229,231,235,.18);
-    --pill: rgba(229,231,235,.08);
-    --mono-bg: rgba(229,231,235,.08);
-    --warn: #ff4d6d;
-    --ok: #2bd576;
-    --link: #7ab7ff;
-    --shadow: 0 1px 2px rgba(0,0,0,.35);
+  /* Explicit override */
+  :root[data-theme="dark"]{
+    --bg: #0b0f14;
+    --fg: #e6edf3;
+    --muted: #9aa4ad;
+    --box: #111826;
+    --border: #2b3442;
+
+    --pill-bg: #1f2a37;
+    --pill-fg: #e6edf3;
+
+    --pre-bg: #0f172a;
+
+    --link: #7aa2ff;
+    --accent: #22c55e;
+    --warn: #ff5566;
+
+    --btn-bg: #1f2a37;
+    --btn-fg: #e6edf3;
+    --btn-border: #2b3442;
   }
 
-  body{
+  body {
     font-family: system-ui, sans-serif;
     padding: 16px;
     background: var(--bg);
-    color: var(--text);
+    color: var(--fg);
   }
 
-  a{ color: var(--link); }
-  a:visited{ color: var(--link); }
+  a { color: var(--link); }
 
-  .topbar{
-    display:flex;
-    gap:12px;
-    align-items:center;
-    justify-content:space-between;
-    margin-bottom: 8px;
-  }
-  .topbar h2{ margin:0; }
-
-  .box{
+  .box {
     border: 1px solid var(--border);
-    background: var(--panel);
-    box-shadow: var(--shadow);
+    background: var(--box);
     border-radius: 12px;
     padding: 12px;
     margin: 12px 0;
-  }
-  .warn{
-    border-color: var(--warn);
-    box-shadow: 0 0 0 1px rgba(255,0,0,.08), var(--shadow);
+    box-shadow: 0 1px 8px rgba(0,0,0,0.06);
   }
 
-  .mode{ font-size: 22px; font-weight: 800; }
+  .warn { border-color: var(--warn); }
 
-  .pill{
+  .mode { font-size: 22px; font-weight: 800; }
+
+  .pill {
     display:inline-block;
     padding: 2px 10px;
     border-radius: 999px;
-    background: var(--pill);
-    border: 1px solid var(--border);
+    background: var(--pill-bg);
+    color: var(--pill-fg);
+    border: 1px solid rgba(0,0,0,0.06);
   }
 
-  code, pre{
-    background: var(--mono-bg);
+  code, pre {
+    background: var(--pre-bg);
     padding: 8px;
     border-radius: 10px;
     overflow:auto;
   }
 
-  input, select, button{
-    font-size: 16px;
-    padding: 8px;
-    color: var(--text);
-    background: var(--panel);
-    border: 1px solid var(--border);
+  input, select, button { font-size: 16px; padding: 8px; }
+  button {
+    cursor: pointer;
+    background: var(--btn-bg);
+    color: var(--btn-fg);
+    border: 1px solid var(--btn-border);
     border-radius: 10px;
   }
-  button{ cursor: pointer; }
-  button:hover{ filter: brightness(1.02); }
+  button:hover { filter: brightness(1.05); }
 
-  .grid{ display: grid; grid-template-columns: 1fr; gap: 12px; }
-  @media (min-width: 900px){ .grid{ grid-template-columns: 1fr 1fr; } }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
 
-  .row{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-  .row > *{ flex: 1 1 220px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex: 1 1 220px; }
 
-  .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-  .log{ max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
-  .small{ font-size: 12px; opacity: 0.85; color: var(--muted); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  .log { max-height: 340px; overflow:auto; white-space: pre-wrap; word-break: break-word; }
+  .small { font-size: 12px; opacity: 0.85; color: var(--muted); }
 </style>"""
 
-THEME_JS = r"""// JR_THEME_TOGGLE_V1: Auto/Dark/Light toggle (localStorage)
-(function(){
-  const KEY = "jr_theme_mode"; // "", "dark", "light"
-  const BTN_ID = "themeBtn";
-
-  function cap(s){ return s ? (s[0].toUpperCase() + s.slice(1)) : s; }
-
-  function safeGet(){
-    try { return (localStorage.getItem(KEY) || "").trim(); } catch { return ""; }
-  }
-  function safeSet(v){
-    try {
-      if (v) localStorage.setItem(KEY, v);
-      else localStorage.removeItem(KEY);
-    } catch {}
-  }
-
-  function apply(mode){
-    document.body.classList.remove("theme-light","theme-dark");
-    if (mode === "dark") document.body.classList.add("theme-dark");
-    if (mode === "light") document.body.classList.add("theme-light");
-    const b = document.getElementById(BTN_ID);
-    if (b) b.textContent = "Theme: " + (mode ? cap(mode) : "Auto");
-  }
-
-  function next(mode){
-    // Auto -> Dark -> Light -> Auto
-    if (!mode) return "dark";
-    if (mode === "dark") return "light";
-    return "";
-  }
-
-  window.addEventListener("load", () => {
-    const cur = safeGet();
-    apply(cur);
-    const b = document.getElementById(BTN_ID);
-    if (b){
-      b.addEventListener("click", () => {
-        const n = next(safeGet());
-        safeSet(n);
-        apply(n);
-      });
-    }
-  });
-})();"""
-
-# 1) Replace the <style>...</style> block (first one only)
-if "<style>" not in text:
-  print("ERROR: no <style> block found in static/index.html", file=sys.stderr)
-  sys.exit(1)
-
-text2 = re.sub(r"<style>.*?</style>", NEW_STYLE, text, count=1, flags=re.S)
-if text2 == text:
-  print("ERROR: failed to replace <style> block", file=sys.stderr)
-  sys.exit(1)
-
-# 2) Replace the plain h2 with a topbar + theme button (id stable)
-if "themeBtn" not in text2:
-  text2 = text2.replace(
-    "<h2>JR Golden SD</h2>",
-    '<div class="topbar" data-jr="JR_THEME_TOGGLE_V1"><h2>JR Golden SD</h2><button id="themeBtn" class="pill" title="Cycle Auto/Dark/Light">Theme: Auto</button></div>',
-    1
-  )
-
-# 3) Inject theme JS right after <script> (only once)
-if "JR_THEME_TOGGLE_V1" not in text2:
-  m = re.search(r"<script>\s*", text2)
-  if not m:
-    print("ERROR: no <script> tag found", file=sys.stderr)
+if not style_re.search(s):
+    print("ERROR: couldn't find <style> block to replace", file=sys.stderr)
     sys.exit(1)
-  insert_at = m.end()
-  text2 = text2[:insert_at] + "\n" + THEME_JS + "\n\n" + text2[insert_at:]
 
-p.write_text(text2, encoding="utf-8")
-print(f"OK: patched {p} (backup: {bak})")
+s = style_re.sub(new_style, s, count=1)
+
+# Replace the plain <h2> with a header row containing a theme button.
+s = s.replace(
+    "<h2>JR Golden SD</h2>",
+    '<div class="row" style="justify-content:space-between;align-items:center;">'
+    '<h2 style="margin:0;flex: 1 1 auto;">JR Golden SD</h2>'
+    '<button id="themeBtn" class="pill" style="flex: 0 0 auto; border:1px solid rgba(0,0,0,0.12);">'
+    'Theme: auto</button>'
+    "</div>"
+)
+
+# Inject theme JS right after <script>
+marker = "<script>"
+if marker not in s:
+    print("ERROR: couldn't find <script> tag", file=sys.stderr)
+    sys.exit(1)
+
+theme_js = """<script>
+// JR_THEME_TOGGLE_V1: auto/light/dark toggle (persists in localStorage)
+(function(){
+  try{
+    const k="jr_theme";
+    const root=document.documentElement;
+    const saved=localStorage.getItem(k);
+    if (saved==="dark" || saved==="light"){
+      root.setAttribute("data-theme", saved);
+    }
+  }catch{}
+})();
+
+function initThemeBtn(){
+  const btn = document.getElementById("themeBtn");
+  if (!btn) return;
+  const k="jr_theme";
+  const root=document.documentElement;
+
+  function cur(){ return root.getAttribute("data-theme") || ""; }
+  function label(){
+    const v = cur();
+    btn.textContent = v ? ("Theme: " + v) : "Theme: auto";
+  }
+
+  btn.addEventListener("click", () => {
+    const v = cur();
+    const next = (v === "dark") ? "light" : (v === "light") ? "" : "dark";
+    if (!next){
+      root.removeAttribute("data-theme");
+      try{ localStorage.removeItem(k); }catch{}
+    } else {
+      root.setAttribute("data-theme", next);
+      try{ localStorage.setItem(k, next); }catch{}
+    }
+    label();
+  });
+
+  label();
+}
+window.addEventListener("load", initThemeBtn);
+
+"""
+
+s = s.replace(marker, theme_js, 1)
+
+p.write_text(s, encoding="utf-8")
+print("OK: patched static/index.html (theme toggle + dark mode)")
